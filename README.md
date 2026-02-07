@@ -127,12 +127,7 @@ This project is licensed under [GNU General Public License (v3)](https://github.
 <br />
 <div align="center" style="padding-top: 0.75rem;">
 
- <a href="https://resilient.tech" target="_blank">
-  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://india-compliance.s3.ap-south-1.amazonaws.com/logo_dark.png">
-   <img src="https://india-compliance.s3.ap-south-1.amazonaws.com/logo.png" alt="Resilient Tech" height="28"/>
-  </picture>
- </a>
+
 <br />
 <br />
 
