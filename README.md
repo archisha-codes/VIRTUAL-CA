@@ -2,38 +2,8 @@
 
 <h1><a href="https://VIRTUAL-CA.app">VIRTUAL-CA</a></h1>
 
-Simple, yet powerful compliance solutions for Indian businesses
-
-[![Server Tests](https://github.com/resilient-tech/india-compliance/actions/workflows/server-tests.yml/badge.svg)](https://github.com/resilient-tech/india-compliance/actions/workflows/server-tests.yml)
-[![Codecov](https://codecov.io/gh/resilient-tech/india-compliance/branch/develop/graph/badge.svg)](https://codecov.io/gh/resilient-tech/india-compliance)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-
-<br><br>
-![image](https://github.com/resilient-tech/india-compliance/assets/16315650/f442f922-acd4-4676-9ae6-494b09242bdf)
-
-</div>
-
-<div align="center">
-
-[Website](https://indiacompliance.app)
-  &nbsp;|&nbsp;
-[Docs](https://docs.indiacompliance.app)
-  &nbsp;|&nbsp;
-[Demo](https://india-compliance.frappe.cloud/demo-login)
-
-</div>
-
 ## Introduction
-
-India Compliance has been designed to make compliance with Indian rules and
-regulations simple, swift and reliable. To this end, it has been carefully
-integrated with GST APIs to simplify recurring compliance processes.
-
-It builds on top of [ERPNext](https://github.com/frappe/erpnext) and the
-[Frappe Framework](https://github.com/frappe/frappe) - incredible FOSS projects
-built and maintained by the folks at Frappe. Go check these out if you haven't
-already!
-
+VIRTUAL-CA
 ## Key Features
 
 ### File GSTR-1 like a Pro
