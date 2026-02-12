@@ -5,7 +5,8 @@ This module provides a FastAPI backend for uploading and processing
 Excel files for GSTR-1 generation with detailed validation error reporting.
 Includes JWT authentication, rate limiting, and audit logging.
 """
-
+from engine_core.engine import GSTR1Engine
+from india_compliance.gst_india.exporters.gstr1_excel import export_gstr1_excel
 # Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv()
@@ -81,6 +82,17 @@ class UserInfo(BaseModel):
     username: str
     role: str
     email: str
+
+
+# ============ GSTR-1 Download Request Model ============
+class GSTR1ExcelRequest(BaseModel):
+    clean_data: List[Dict[str, Any]]
+    return_period: str = ""
+    taxpayer_gstin: str = ""
+    taxpayer_name: str = ""
+    company_gstin: str = ""
+    include_hsn: bool = True
+    include_docs: bool = False
 
 
 # ============ GSTR-3B Download Request Model ============
@@ -639,90 +651,37 @@ async def upload_gstr1_excel(file: UploadFile = File(...), current_user: Dict[st
     return await upload_excel(file, current_user=current_user)
 
 
-@app.post("/download-gstr1-json")
-async def download_gstr1_json(
-    clean_data: List[Dict[str, Any]],
-    company_gstin: str = "",
-    include_hsn: bool = True,
-    include_docs: bool = False,
-    return_period: str = "",
-    taxpayer_name: str = "",
-    taxpayer_gstin: str = "",
+@app.post("/download-gstr1-excel")
+async def download_gstr1_excel_post(
+    request: GSTR1ExcelRequest,
     api_key: str = Depends(get_api_key),
-    client_host: str = "127.0.0.1",
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user)
-) -> StreamingResponse:
-    """
-    Generate and download GSTR-1 JSON file.
-    
-    Args:
-        clean_data: List of validated sales invoice records
-        company_gstin: Company's GSTIN for inter-state determination
-        include_hsn: Include HSN summary in output
-        include_docs: Include document summary in output
-        return_period: Return period in MMYYYY format
-        taxpayer_name: Name of the taxpayer
-        taxpayer_gstin: GSTIN of the taxpayer
-    """
-    username = current_user["sub"] if current_user else "api_user"
-    logger.info(f"GSTR-1 JSON download requested by {username} with {len(clean_data)} records")
-    
-    audit_logger.log("download_gstr1_json", username, {
-        "ip_address": client_host,
-        "records_count": len(clean_data),
-        "return_period": return_period
-    })
+):
     
     try:
-        from india_compliance.gst_india.gstr1_data import generate_gstr1_json, generate_gstr1_tables
-        
-        # Generate GSTR-1 tables first
-        gstr1_tables = generate_gstr1_tables(
-            clean_data=clean_data,
-            company_gstin=company_gstin,
-            include_hsn=include_hsn,
-            include_docs=include_docs
+        import pandas as pd
+
+        df = pd.DataFrame(request.clean_data)
+
+        engine = GSTR1Engine(company_gstin=request.company_gstin)
+        gstr1_tables = engine.run_from_dataframe(df)
+
+        excel_bytes = export_gstr1_excel(
+            clean_data=gstr1_tables,
+            return_period=request.return_period,
+            taxpayer_gstin=request.taxpayer_gstin,
+            taxpayer_name=request.taxpayer_name
         )
-        
-        # Generate complete GSTR-1 JSON for filing
-        gstr1_json = generate_gstr1_json(
-            clean_data=clean_data,
-            company_gstin=company_gstin,
-            return_period=return_period,
-            gstin=taxpayer_gstin,
-            username=taxpayer_name
-        )
-        
-        # Add metadata
-        gstr1_json["generated_at"] = datetime.utcnow().isoformat() + "Z"
-        gstr1_json["generated_by"] = username
-        
-        json_bytes = json.dumps(gstr1_json, indent=2, default=str).encode('utf-8')
-        
-        # Generate filename with return period or timestamp
-        if return_period:
-            filename = f"gstr1_{return_period}.json"
-        else:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"gstr1_{timestamp}.json"
-        
-        logger.info(f"GSTR-1 JSON download prepared: {len(json_bytes)} bytes, "
-                    f"B2B: {len(gstr1_json.get('b2b', []))}, "
-                    f"B2CL: {len(gstr1_json.get('b2cl', []))}, "
-                    f"B2CS: {len(gstr1_json.get('b2cs', []))}")
         
         return StreamingResponse(
-            io.BytesIO(json_bytes),
-            media_type="application/json",
+            io.BytesIO(excel_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "Content-Length": str(len(json_bytes)),
+                "Content-Disposition": f'attachment; filename="gstr1.xlsx"',
             }
         )
-        
+
     except Exception as e:
-        logger.exception(f"Error generating GSTR-1 JSON: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate GSTR-1 JSON: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/download-gstr1-json")
@@ -1137,7 +1096,7 @@ async def download_template(
 @app.get("/download-gstr1-excel")
 async def download_gstr1_excel(
     api_key: str = Depends(get_api_key),
-    client_host: str = "127.0..1",
+    client_host: str = "127.0.0.1",
     current_user: Optional[Dict[str, Any]] = Depends(get_current_user)
 ) -> StreamingResponse:
     """Download GSTR-1 data as Excel file (API key or JWT required)."""
@@ -1183,6 +1142,81 @@ async def download_gstr1_excel(
             error_code="GSTR1_GEN_01"
         )
         raise HTTPException(status_code=500, detail=error_response.to_dict())
+
+
+@app.post("/download-gstr1-excel")
+async def download_gstr1_excel_post(
+    request: GSTR1ExcelRequest,
+    api_key: str = Depends(get_api_key),
+    client_host: str = "127.0.0.1",
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user)
+) -> StreamingResponse:
+    """
+    Generate and download GSTR-1 Excel file matching the offline utility format.
+    
+    Args:
+        request: JSON payload with clean_data, return_period, taxpayer_gstin, taxpayer_name
+    
+    Returns:
+        Excel file with sheets: Summary, B2B, B2CL, B2CS, EXP, CDNR, CDNUR, HSN, Docs
+    """
+    username = current_user["sub"] if current_user else "api_user"
+    logger.info(f"GSTR-1 Excel POST download requested by {username} with {len(request.clean_data)} records")
+    
+    audit_logger.log("download_gstr1_excel_post", username, {
+        "ip_address": client_host,
+        "records_count": len(request.clean_data),
+        "return_period": request.return_period
+    })
+    
+    try:
+        from india_compliance.gst_india.gstr1_data import generate_gstr1_tables
+        from india_compliance.gst_india.exporters.gstr1_excel import export_gstr1_excel
+        
+        # Generate GSTR-1 tables from clean_data
+        gstr1_tables = generate_gstr1_tables(
+            clean_data=request.clean_data,
+            company_gstin=request.company_gstin or request.taxpayer_gstin,
+            include_hsn=request.include_hsn,
+            include_docs=request.include_docs
+        )
+        
+        # Generate Excel file matching offline utility format
+        excel_bytes = export_gstr1_excel(
+    gstr1_tables,
+    return_period=request.return_period,
+    taxpayer_gstin=request.taxpayer_gstin,
+    taxpayer_name=request.taxpayer_name,
+)
+
+        
+        # Generate filename
+        if request.return_period:
+            filename = f"gstr1_{request.return_period}.xlsx"
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"gstr1_{timestamp}.xlsx"
+        
+        logger.info(f"GSTR-1 Excel download prepared: {len(excel_bytes)} bytes, "
+                    f"B2B: {len(gstr1_tables.get('b2b', []))}, "
+                    f"B2CL: {len(gstr1_tables.get('b2cl', []))}, "
+                    f"B2CS: {len(gstr1_tables.get('b2cs', []))}")
+        
+        return StreamingResponse(
+            io.BytesIO(excel_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(len(excel_bytes)),
+            }
+        )
+        
+    except ImportError as e:
+        logger.exception(f"Missing dependency for GSTR-1 Excel: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Missing dependency: {str(e)}")
+    except Exception as e:
+        logger.exception(f"Error generating GSTR-1 Excel: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate GSTR-1 Excel: {str(e)}")
 
 
 @app.get("/gstr1-template-format")

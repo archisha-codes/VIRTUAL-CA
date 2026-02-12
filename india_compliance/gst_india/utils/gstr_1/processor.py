@@ -84,6 +84,16 @@ VALID_TAX_RATES = {0, 0.1, 0.25, 1, 1.5, 3, 5, 7.5, 12, 18, 28}
 MAX_INVOICE_VALUE = 999999999.99
 
 
+def _safe_str(value: Any) -> str:
+    """Safely convert a value to string, handling NaN and None."""
+    if value is None or pd.isna(value):
+        return ""
+    s = str(value).strip()
+    if s in ["", "nan", "NaN", "None", "null"]:
+        return ""
+    return s
+
+
 class GSTR1ValidationError(Exception):
     """Custom exception for GSTR-1 validation errors."""
     
@@ -483,156 +493,6 @@ class GSTR1Validator:
             "warnings": self.warnings,
             "is_valid": len(self.errors) == 0,
         }
-    
-    def validate_sales_row(self, row: Dict[str, Any], row_num: int, company_gstin: str = "") -> List[Dict[str, Any]]:
-        """
-        Validate a single sales row before classification.
-        
-        Args:
-            row: Dictionary containing sales row data
-            row_num: Row number for error reporting
-            company_gstin: Company's GSTIN for inter-state determination
-            
-        Returns:
-            List of error dictionaries. Empty list means valid.
-        """
-        errors = []
-        
-        # Mandatory columns check
-        mandatory_fields = {
-            GovExcelField.GSTIN.value: "GSTIN",
-            GovExcelField.INVOICE_NUMBER.value: "Invoice No",
-            GovExcelField.INVOICE_DATE.value: "Invoice Date",
-            GovExcelField.TAXABLE_VALUE.value: "Taxable Value",
-        }
-        
-        # Check mandatory fields
-        for field_key, field_name in mandatory_fields.items():
-            value = row.get(field_key)
-            if value is None or pd.isna(value) or str(value).strip() == "":
-                errors.append({
-                    "row": row_num,
-                    "field": field_name,
-                    "value": str(value) if value else None,
-                    "message": f"{field_name} is required",
-                    "error_code": f"MAND_{field_key}",
-                })
-        
-        # If mandatory fields are missing, skip further validation
-        if len(errors) >= len(mandatory_fields):
-            return errors
-        
-        # Validate GSTIN format (15-digit pattern)
-        gstin = str(row.get(GovExcelField.GSTIN.value, "")).strip()
-        if gstin and gstin != "NA":
-            if not self.validate_gstin(gstin, row_num, "GSTIN"):
-                errors.append({
-                    "row": row_num,
-                    "field": "GSTIN",
-                    "value": gstin,
-                    "message": "Invalid GSTIN format. Must be 15 characters (e.g., 07BZAAH6384P1ZH)",
-                    "error_code": "GSTIN_03",
-                })
-        
-        # Validate Place of Supply (must match state codes)
-        pos = row.get(GovExcelField.POS.value)
-        if pos and not pd.isna(pos):
-            pos_validated = self.validate_place_of_supply(pos, row_num)
-            if not pos_validated:
-                errors.append({
-                    "row": row_num,
-                    "field": "Place of Supply",
-                    "value": str(pos),
-                    "message": f"Invalid place of supply. Must be valid state code (e.g., 27-Maharashtra)",
-                    "error_code": "POS_02",
-                })
-        
-        # Validate Invoice Date (DD-MM-YYYY format, not future dated)
-        invoice_date = row.get(GovExcelField.INVOICE_DATE.value)
-        if invoice_date and not pd.isna(invoice_date):
-            date_parsed = self.validate_date(invoice_date, row_num, "Invoice Date")
-            if date_parsed and date_parsed > datetime.now():
-                errors.append({
-                    "row": row_num,
-                    "field": "Invoice Date",
-                    "value": str(invoice_date),
-                    "message": "Invoice date cannot be in the future",
-                    "error_code": "DATE_03",
-                })
-        
-        # Validate Invoice Value (must be positive)
-        invoice_value = row.get(GovExcelField.INVOICE_VALUE.value)
-        if invoice_value is not None and not pd.isna(invoice_value):
-            value_validated = self.validate_invoice_value(invoice_value, row_num)
-            if value_validated is None:
-                errors.append({
-                    "row": row_num,
-                    "field": "Invoice Value",
-                    "value": str(invoice_value),
-                    "message": "Invoice value must be greater than zero",
-                    "error_code": "INV_02",
-                })
-        
-        # Validate Tax Rate
-        tax_rate = row.get(GovExcelField.TAX_RATE.value)
-        if tax_rate is not None and not pd.isna(tax_rate):
-            rate_validated = self.validate_tax_rate(tax_rate, row_num)
-            if rate_validated is None:
-                errors.append({
-                    "row": row_num,
-                    "field": "Tax Rate",
-                    "value": str(tax_rate),
-                    "message": "Invalid tax rate",
-                    "error_code": "TAX_04",
-                })
-        
-        # Validate Amount fields (Taxable Value, IGST, CGST, SGST, CESS)
-        amount_fields = {
-            GovExcelField.TAXABLE_VALUE.value: "Taxable Value",
-            GovExcelField.IGST.value: "IGST Amount",
-            GovExcelField.CGST.value: "CGST Amount",
-            GovExcelField.SGST.value: "SGST Amount",
-            GovExcelField.CESS.value: "CESS Amount",
-        }
-        
-        for field_key, field_name in amount_fields.items():
-            amount = row.get(field_key)
-            if amount is not None and not pd.isna(amount):
-                amount_validated = self.validate_amount(amount, row_num, field_name)
-                if amount_validated is None:
-                    errors.append({
-                        "row": row_num,
-                        "field": field_name,
-                        "value": str(amount),
-                        "message": f"Invalid {field_name.lower()} format",
-                        "error_code": "AMT_02",
-                    })
-        
-        # Validate Reverse Charge if present
-        reverse_charge = row.get(GovExcelField.REVERSE_CHARGE.value)
-        if reverse_charge is not None and not pd.isna(reverse_charge):
-            if not self.validate_reverse_charge(reverse_charge, row_num):
-                errors.append({
-                    "row": row_num,
-                    "field": "Reverse Charge",
-                    "value": str(reverse_charge),
-                    "message": "Reverse charge must be 'Y' or 'N'",
-                    "error_code": "RC_01",
-                })
-        
-        # Validate E-Commerce GSTIN if present
-        ecommerce_gstin = row.get(GovExcelField.ECOMMERCE_GSTIN.value)
-        if ecommerce_gstin and not pd.isna(ecommerce_gstin) and str(ecommerce_gstin).strip():
-            if not self.validate_ecommerce_gstin(str(ecommerce_gstin).strip(), row_num):
-                errors.append({
-                    "row": row_num,
-                    "field": "E-Commerce GSTIN",
-                    "value": str(ecommerce_gstin),
-                    "message": "Invalid E-Commerce GSTIN format",
-                    "error_code": "GSTIN_03",
-                })
-        
-        return errors
 
 
 class GSTR1ExcelProcessor:
@@ -691,9 +551,9 @@ class GSTR1ExcelProcessor:
         self, row: pd.Series, company_gstin: str = ""
     ) -> Dict[str, Any]:
         """Classify invoice into GSTR-1 categories."""
-        customer_gstin = str(row.get(GovExcelField.CUST_GSTIN.value, "")).strip()
-        place_of_supply = str(row.get(GovExcelField.POS.value, "")).strip()
-        invoice_value = self.validate_amount(row.get(GovExcelField.INVOICE_VALUE.value, 0))
+        customer_gstin = _safe_str(row.get(GovExcelField.CUST_GSTIN, ""))
+        place_of_supply = _safe_str(row.get(GovExcelField.POS, ""))
+        invoice_value = self.validate_amount(row.get(GovExcelField.INVOICE_VALUE, 0))
         
         is_inter_state = False
         if company_gstin and len(company_gstin) >= 2:
@@ -724,8 +584,8 @@ class GSTR1ExcelProcessor:
         logger.debug(f"Starting B2B sheet processing: {len(df)} rows")
         invoices = []
         for idx, row in df.iterrows():
-            row_num = idx + 2  # Excel row number (1-indexed + header)
-            customer_gstin = str(row.get(GovExcelField.CUST_GSTIN.value, "")).strip()
+            row_num = idx + 4  # Excel row number (1-indexed + 3 rows: 2 summary + 1 header)
+            customer_gstin = _safe_str(row.get(GovExcelField.CUST_GSTIN, ""))
             
             # Skip rows without GSTIN
             if not customer_gstin or customer_gstin == "NA":
@@ -737,55 +597,72 @@ class GSTR1ExcelProcessor:
             
             # Validate invoice number
             invoice_no = self.validator.validate_invoice_number(
-                row.get(GovExcelField.INVOICE_NUMBER.value), row_num
+                _safe_str(row.get(GovExcelField.INVOICE_NUMBER, "")), row_num
             )
             if not invoice_no:
                 continue
             
             # Validate invoice date
             invoice_date = self.validator.validate_date(
-                row.get(GovExcelField.INVOICE_DATE.value), row_num
+                row.get(GovExcelField.INVOICE_DATE), row_num
             )
             if not invoice_date:
                 continue
             
             # Validate invoice value
             invoice_value = self.validator.validate_invoice_value(
-                row.get(GovExcelField.INVOICE_VALUE.value), row_num
+                row.get(GovExcelField.INVOICE_VALUE), row_num
             )
             if invoice_value is None:
                 continue
             
             # Validate place of supply
             place_of_supply = self.validator.validate_place_of_supply(
-                row.get(GovExcelField.POS.value), row_num
+                _safe_str(row.get(GovExcelField.POS, "")), row_num
             )
             if not place_of_supply:
                 continue
             
             # Validate tax rate
             tax_rate = self.validator.validate_tax_rate(
-                row.get(GovExcelField.TAX_RATE.value), row_num
+                row.get(GovExcelField.TAX_RATE), row_num
             )
             if tax_rate is None:
                 continue
             
-            # Get amounts
+            # Get amounts - note: IGST/CGST/SGST may not be in template, calculate them
             taxable_value = self.validator.validate_amount(
-                row.get(GovExcelField.TAXABLE_VALUE.value), row_num
+                row.get(GovExcelField.TAXABLE_VALUE), row_num
             )
             igst_amount = self.validator.validate_amount(
-                row.get(GovExcelField.IGST.value), row_num
+                row.get(GovExcelField.IGST), row_num
             )
             cgst_amount = self.validator.validate_amount(
-                row.get(GovExcelField.CGST.value), row_num
+                row.get(GovExcelField.CGST), row_num
             )
             sgst_amount = self.validator.validate_amount(
-                row.get(GovExcelField.SGST.value), row_num
+                row.get(GovExcelField.SGST), row_num
             )
             cess_amount = self.validator.validate_amount(
-                row.get(GovExcelField.CESS.value), row_num
+                row.get(GovExcelField.CESS), row_num
             )
+            
+            # Calculate tax amounts if not provided (template may not have these columns)
+            # Determine inter-state vs intra-state
+            is_inter_state = True
+            if self.company_gstin and len(self.company_gstin) >= 2:
+                company_state = self.company_gstin[:2]
+                if place_of_supply and len(place_of_supply) >= 2:
+                    customer_state = place_of_supply.split("-")[0].strip() if "-" in place_of_supply else place_of_supply[:2]
+                    is_inter_state = company_state != customer_state
+            
+            if igst_amount == 0 and cgst_amount == 0 and sgst_amount == 0:
+                # Calculate based on inter/intra state
+                if is_inter_state:
+                    igst_amount = round(taxable_value * tax_rate / 100, 2)
+                else:
+                    cgst_amount = round(taxable_value * tax_rate / 200, 2)
+                    sgst_amount = cgst_amount
             
             # Validate tax amounts
             self.validator.validate_tax_amounts(
@@ -799,13 +676,13 @@ class GSTR1ExcelProcessor:
                 "invoice_value": invoice_value,
                 "place_of_supply": place_of_supply,
                 "reverse_charge": self.validator.validate_reverse_charge(
-                    row.get(GovExcelField.REVERSE_CHARGE.value), row_num
+                    row.get(GovExcelField.REVERSE_CHARGE), row_num
                 ),
-                "invoice_type": str(row.get(GovExcelField.INVOICE_TYPE.value, "Regular B2B")).strip(),
-                "ecommerce_gstin": str(row.get(GovExcelField.ECOMMERCE_GSTIN.value, "")).strip(),
+                "invoice_type": _safe_str(row.get(GovExcelField.INVOICE_TYPE, "Regular B2B")),
+                "ecommerce_gstin": _safe_str(row.get(GovExcelField.ECOMMERCE_GSTIN, "")),
                 "customer": {
                     "gstin": customer_gstin,
-                    "name": str(row.get(GovExcelField.CUST_NAME.value, "")).strip(),
+                    "name": _safe_str(row.get(GovExcelField.CUST_NAME, "")),
                 },
                 "items": [{
                     "taxable_value": taxable_value,
@@ -825,56 +702,65 @@ class GSTR1ExcelProcessor:
         return invoices
     
     def process_b2cs_sheet(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
-        """Process B2C (Others) invoices sheet with validations."""
+        """Process B2C (Others) invoices sheet with validations.
+        
+        B2CS sheet has a different format - it aggregates by type/place of supply/rate
+        without individual invoice numbers or dates.
+        """
         logger.debug(f"Starting B2CS sheet processing: {len(df)} rows")
         invoices = []
         for idx, row in df.iterrows():
-            row_num = idx + 2
+            row_num = idx + 4
             
-            # Validate place of supply
+            # Validate place of supply (required for B2CS)
             place_of_supply = self.validator.validate_place_of_supply(
-                row.get(GovExcelField.POS.value), row_num
+                _safe_str(row.get(GovExcelField.POS, "")), row_num
             )
             if not place_of_supply:
                 continue
             
-            # Validate invoice date
-            invoice_date = self.validator.validate_date(
-                row.get(GovExcelField.INVOICE_DATE.value), row_num
-            )
-            if not invoice_date:
-                continue
-            
-            # Validate invoice value
-            invoice_value = self.validator.validate_invoice_value(
-                row.get(GovExcelField.INVOICE_VALUE.value), row_num
-            )
-            if invoice_value is None:
-                continue
-            
-            # Validate tax rate
+            # Validate tax rate (required for B2CS)
             tax_rate = self.validator.validate_tax_rate(
-                row.get(GovExcelField.TAX_RATE.value), row_num
+                row.get(GovExcelField.TAX_RATE), row_num
             )
             if tax_rate is None:
                 continue
             
-            # Get amounts
+            # Get amounts - these are totals for the type/pos/rate combination
             taxable_value = self.validator.validate_amount(
-                row.get(GovExcelField.TAXABLE_VALUE.value), row_num
+                row.get(GovExcelField.TAXABLE_VALUE), row_num
             )
+            if taxable_value <= 0:
+                continue  # Skip rows with no taxable value
+            
             igst_amount = self.validator.validate_amount(
-                row.get(GovExcelField.IGST.value), row_num
+                row.get(GovExcelField.IGST), row_num
             )
             cgst_amount = self.validator.validate_amount(
-                row.get(GovExcelField.CGST.value), row_num
+                row.get(GovExcelField.CGST), row_num
             )
             sgst_amount = self.validator.validate_amount(
-                row.get(GovExcelField.SGST.value), row_num
+                row.get(GovExcelField.SGST), row_num
             )
             cess_amount = self.validator.validate_amount(
-                row.get(GovExcelField.CESS.value), row_num
+                row.get(GovExcelField.CESS), row_num
             )
+            
+            # Calculate tax amounts if not provided
+            # Determine inter-state vs intra-state
+            is_inter_state = True
+            if self.company_gstin and len(self.company_gstin) >= 2:
+                company_state = self.company_gstin[:2]
+                if place_of_supply and len(place_of_supply) >= 2:
+                    customer_state = place_of_supply.split("-")[0].strip() if "-" in place_of_supply else place_of_supply[:2]
+                    is_inter_state = company_state != customer_state
+            
+            if igst_amount == 0 and cgst_amount == 0 and sgst_amount == 0:
+                if is_inter_state:
+                    igst_amount = round(taxable_value * tax_rate / 100, 2)
+                else:
+                    cgst_amount = round(taxable_value * tax_rate / 200, 2)
+                    sgst_amount = cgst_amount
             
             # Validate tax amounts
             self.validator.validate_tax_amounts(
@@ -882,13 +768,14 @@ class GSTR1ExcelProcessor:
                 cess_amount, row_num, place_of_supply
             )
             
+            # B2CS doesn't have invoice numbers or dates - use generated values
             invoice = {
                 "invoice_no": str(idx + 1).zfill(4),
-                "invoice_date": invoice_date,
-                "invoice_value": invoice_value,
+                "invoice_date": datetime.now().strftime("%d/%m/%Y"),
+                "invoice_value": taxable_value,  # For B2CS, invoice value = taxable value
                 "place_of_supply": place_of_supply,
-                "invoice_type": str(row.get(GovExcelField.INVOICE_TYPE.value, "OE")).strip(),
-                "ecommerce_gstin": str(row.get(GovExcelField.ECOMMERCE_GSTIN.value, "")).strip(),
+                "invoice_type": _safe_str(row.get(GovExcelField.INVOICE_TYPE, "OE")),
+                "ecommerce_gstin": _safe_str(row.get(GovExcelField.ECOMMERCE_GSTIN, "")),
                 "items": [{
                     "taxable_value": taxable_value,
                     "igst_amount": igst_amount,
@@ -900,7 +787,7 @@ class GSTR1ExcelProcessor:
             }
             invoices.append(invoice)
         
-        logger.debug(f"B2CS sheet processing complete: {len(invoices)} valid invoices")
+        logger.debug(f"B2CS sheet processing complete: {len(invoices)} valid entries")
         self.errors.extend(self.validator.errors)
         self.warnings.extend(self.validator.warnings)
         return invoices
@@ -910,77 +797,81 @@ class GSTR1ExcelProcessor:
         logger.debug(f"Starting B2CL sheet processing: {len(df)} rows")
         invoices = []
         for idx, row in df.iterrows():
-            row_num = idx + 2
+            row_num = idx + 4
             
             # Validate invoice number
             invoice_no = self.validator.validate_invoice_number(
-                row.get(GovExcelField.INVOICE_NUMBER.value), row_num
+                _safe_str(row.get(GovExcelField.INVOICE_NUMBER, "")), row_num
             )
             if not invoice_no:
                 continue
             
             # Validate invoice date
             invoice_date = self.validator.validate_date(
-                row.get(GovExcelField.INVOICE_DATE.value), row_num
+                row.get(GovExcelField.INVOICE_DATE), row_num
             )
             if not invoice_date:
                 continue
             
             # Validate invoice value
             invoice_value = self.validator.validate_invoice_value(
-                row.get(GovExcelField.INVOICE_VALUE.value), row_num
+                row.get(GovExcelField.INVOICE_VALUE), row_num
             )
             if invoice_value is None:
                 continue
             
             # Validate place of supply
             place_of_supply = self.validator.validate_place_of_supply(
-                row.get(GovExcelField.POS.value), row_num
+                _safe_str(row.get(GovExcelField.POS, "")), row_num
             )
             if not place_of_supply:
                 continue
             
             # Validate tax rate
             tax_rate = self.validator.validate_tax_rate(
-                row.get(GovExcelField.TAX_RATE.value), row_num
+                row.get(GovExcelField.TAX_RATE), row_num
             )
             if tax_rate is None:
                 continue
             
-            # Get amounts
+            # Get amounts - B2CL is always inter-state, so IGST applies
             taxable_value = self.validator.validate_amount(
-                row.get(GovExcelField.TAXABLE_VALUE.value), row_num
+                row.get(GovExcelField.TAXABLE_VALUE), row_num
             )
             igst_amount = self.validator.validate_amount(
-                row.get(GovExcelField.IGST.value), row_num
+                row.get(GovExcelField.IGST), row_num
             )
             cgst_amount = self.validator.validate_amount(
-                row.get(GovExcelField.CGST.value), row_num
+                row.get(GovExcelField.CGST), row_num
             )
             sgst_amount = self.validator.validate_amount(
-                row.get(GovExcelField.SGST.value), row_num
+                row.get(GovExcelField.SGST), row_num
             )
             cess_amount = self.validator.validate_amount(
-                row.get(GovExcelField.CESS.value), row_num
+                row.get(GovExcelField.CESS), row_num
             )
             
-            # Validate tax amounts
+            # Calculate IGST if not provided (B2CL is always inter-state)
+            if igst_amount == 0 and cgst_amount == 0 and sgst_amount == 0:
+                igst_amount = round(taxable_value * tax_rate / 100, 2)
+            
+            # Validate tax amounts (B2CL is always inter-state)
             self.validator.validate_tax_amounts(
                 taxable_value, tax_rate, igst_amount, cgst_amount, sgst_amount,
                 cess_amount, row_num, place_of_supply
             )
             
-            customer_gstin = str(row.get(GovExcelField.CUST_GSTIN.value, "")).strip()
+            customer_gstin = _safe_str(row.get(GovExcelField.CUST_GSTIN, ""))
             invoice = {
                 "invoice_no": invoice_no,
                 "invoice_date": invoice_date,
                 "invoice_value": invoice_value,
                 "place_of_supply": place_of_supply,
-                "invoice_type": str(row.get(GovExcelField.INVOICE_TYPE.value, "R")).strip(),
-                "ecommerce_gstin": str(row.get(GovExcelField.ECOMMERCE_GSTIN.value, "")).strip(),
+                "invoice_type": _safe_str(row.get(GovExcelField.INVOICE_TYPE, "R")),
+                "ecommerce_gstin": _safe_str(row.get(GovExcelField.ECOMMERCE_GSTIN, "")),
                 "customer": {
                     "gstin": customer_gstin if customer_gstin and customer_gstin != "NA" else "",
-                    "name": str(row.get(GovExcelField.CUST_NAME.value, "")).strip(),
+                    "name": _safe_str(row.get(GovExcelField.CUST_NAME, "")),
                 },
                 "items": [{
                     "taxable_value": taxable_value,
@@ -991,11 +882,11 @@ class GSTR1ExcelProcessor:
                     "tax_rate": tax_rate,
                 }],
                 "shipping_bill": {
-                    "bill_no": str(row.get(GovExcelField.SHIPPING_BILL_NO.value, "")).strip(),
+                    "bill_no": _safe_str(row.get(GovExcelField.SHIPPING_BILL_NO, "")),
                     "bill_date": self.validator.validate_date(
-                        row.get(GovExcelField.SHIPPING_BILL_DATE.value), row_num
+                        row.get(GovExcelField.SHIPPING_BILL_DATE), row_num
                     ),
-                    "port_code": str(row.get(GovExcelField.PORT_CODE.value, "")).strip(),
+                    "port_code": _safe_str(row.get(GovExcelField.PORT_CODE, "")),
                 },
             }
             invoices.append(invoice)
@@ -1010,52 +901,56 @@ class GSTR1ExcelProcessor:
         logger.debug(f"Starting Export sheet processing: {len(df)} rows")
         invoices = []
         for idx, row in df.iterrows():
-            row_num = idx + 2
+            row_num = idx + 4
             
             # Validate invoice number
             invoice_no = self.validator.validate_invoice_number(
-                row.get(GovExcelField.INVOICE_NUMBER.value), row_num
+                _safe_str(row.get(GovExcelField.INVOICE_NUMBER, "")), row_num
             )
             if not invoice_no:
                 continue
             
             # Validate invoice date
             invoice_date = self.validator.validate_date(
-                row.get(GovExcelField.INVOICE_DATE.value), row_num
+                row.get(GovExcelField.INVOICE_DATE), row_num
             )
             if not invoice_date:
                 continue
             
             # Validate invoice value
             invoice_value = self.validator.validate_invoice_value(
-                row.get(GovExcelField.INVOICE_VALUE.value), row_num
+                row.get(GovExcelField.INVOICE_VALUE), row_num
             )
             if invoice_value is None:
                 continue
             
             # Validate tax rate
             tax_rate = self.validator.validate_tax_rate(
-                row.get(GovExcelField.TAX_RATE.value), row_num
+                row.get(GovExcelField.TAX_RATE), row_num
             )
             if tax_rate is None:
                 continue
             
-            # Get amounts
+            # Get amounts - exports are always inter-state
             taxable_value = self.validator.validate_amount(
-                row.get(GovExcelField.TAXABLE_VALUE.value), row_num
+                row.get(GovExcelField.TAXABLE_VALUE), row_num
             )
             igst_amount = self.validator.validate_amount(
-                row.get(GovExcelField.IGST.value), row_num
+                row.get(GovExcelField.IGST), row_num
             )
             cgst_amount = self.validator.validate_amount(
-                row.get(GovExcelField.CGST.value), row_num
+                row.get(GovExcelField.CGST), row_num
             )
             sgst_amount = self.validator.validate_amount(
-                row.get(GovExcelField.SGST.value), row_num
+                row.get(GovExcelField.SGST), row_num
             )
             cess_amount = self.validator.validate_amount(
-                row.get(GovExcelField.CESS.value), row_num
+                row.get(GovExcelField.CESS), row_num
             )
+            
+            # Calculate IGST if not provided (exports are always inter-state)
+            if igst_amount == 0 and cgst_amount == 0 and sgst_amount == 0:
+                igst_amount = round(taxable_value * tax_rate / 100, 2)
             
             # Validate tax amounts (exports are always inter-state)
             self.validator.validate_tax_amounts(
@@ -1063,7 +958,7 @@ class GSTR1ExcelProcessor:
                 cess_amount, row_num, "96-Other Countries"
             )
             
-            invoice_type_val = str(row.get(GovExcelField.INVOICE_TYPE.value, "")).upper()
+            invoice_type_val = _safe_str(row.get(GovExcelField.INVOICE_TYPE, "")).upper()
             invoice_type = "WPAY" if "WP" in invoice_type_val else "WOPAY"
             
             invoice = {
@@ -1075,7 +970,7 @@ class GSTR1ExcelProcessor:
                 "ecommerce_gstin": "",
                 "customer": {
                     "gstin": "",
-                    "name": str(row.get(GovExcelField.CUST_NAME.value, "")).strip(),
+                    "name": _safe_str(row.get(GovExcelField.CUST_NAME, "")),
                 },
                 "items": [{
                     "taxable_value": taxable_value,
@@ -1086,11 +981,11 @@ class GSTR1ExcelProcessor:
                     "tax_rate": tax_rate,
                 }],
                 "shipping_bill": {
-                    "bill_no": str(row.get(GovExcelField.SHIPPING_BILL_NO.value, "")).strip(),
+                    "bill_no": _safe_str(row.get(GovExcelField.SHIPPING_BILL_NO, "")),
                     "bill_date": self.validator.validate_date(
-                        row.get(GovExcelField.SHIPPING_BILL_DATE.value), row_num
+                        row.get(GovExcelField.SHIPPING_BILL_DATE), row_num
                     ),
-                    "port_code": str(row.get(GovExcelField.PORT_CODE.value, "")).strip(),
+                    "port_code": _safe_str(row.get(GovExcelField.PORT_CODE, "")),
                 },
             }
             invoices.append(invoice)
@@ -1138,7 +1033,7 @@ class GSTR1ExcelProcessor:
             summary["total_invoices"] += 1
             summary["b2cl_count"] += 1
         
-        # Process B2CS invoices
+        # Process B2CS entries (each row is an aggregate, not an individual invoice)
         for invoice in data.get("b2cs", []):
             for item in invoice.get("items", []):
                 summary["total_taxable_value"] += item["taxable_value"]
@@ -1216,11 +1111,27 @@ class GSTR1ExcelProcessor:
             "validation_summary": {},
         }
         
-        # Process B2B sheet
-        if GovExcelSheetName.B2B.value in excel_file.sheet_names:
+        # Number of summary rows to skip before header (in GST template)
+        SUMMARY_ROWS_TO_SKIP = 2
+        
+        # Convert sheet names to lowercase for case-insensitive matching
+        sheet_names_lower = [s.lower() for s in excel_file.sheet_names]
+        
+        # Process B2B sheet - note: B2B sheet value is "b2b,sez,de" which contains "b2b"
+        b2b_sheet_name = GovExcelSheetName.B2B.value
+        b2b_idx = None
+        for i, sheet_lower in enumerate(sheet_names_lower):
+            if b2b_sheet_name in sheet_lower or sheet_lower in b2b_sheet_name:
+                b2b_idx = i
+                break
+        
+        if b2b_idx is not None:
             try:
-                df = pd.read_excel(excel_file, sheet_name=GovExcelSheetName.B2B.value)
-                logger.info(f"Processing B2B sheet: {len(df)} rows")
+                # Read with header at row 2 (after 2 summary rows)
+                df = pd.read_excel(excel_file, sheet_name=excel_file.sheet_names[b2b_idx], header=SUMMARY_ROWS_TO_SKIP)
+                # Skip any empty rows after header
+                df = df.dropna(how='all').reset_index(drop=True)
+                logger.info(f"Processing B2B sheet: {len(df)} rows (after skipping {SUMMARY_ROWS_TO_SKIP} summary rows)")
                 result["b2b"] = self.process_b2b_sheet(df)
                 logger.info(f"Processed {len(result['b2b'])} valid B2B invoices")
             except Exception as e:
@@ -1228,9 +1139,17 @@ class GSTR1ExcelProcessor:
                 self.warnings.append(f"Failed to process B2B sheet: {str(e)}")
         
         # Process B2CL sheet
-        if GovExcelSheetName.B2CL.value in excel_file.sheet_names:
+        b2cl_sheet_name = GovExcelSheetName.B2CL.value
+        b2cl_idx = None
+        for i, sheet_lower in enumerate(sheet_names_lower):
+            if b2cl_sheet_name == sheet_lower:
+                b2cl_idx = i
+                break
+        
+        if b2cl_idx is not None:
             try:
-                df = pd.read_excel(excel_file, sheet_name=GovExcelSheetName.B2CL.value)
+                df = pd.read_excel(excel_file, sheet_name=excel_file.sheet_names[b2cl_idx], header=SUMMARY_ROWS_TO_SKIP)
+                df = df.dropna(how='all').reset_index(drop=True)
                 logger.info(f"Processing B2CL sheet: {len(df)} rows")
                 result["b2cl"] = self.process_b2cl_sheet(df)
                 logger.info(f"Processed {len(result['b2cl'])} valid B2CL invoices")
@@ -1239,20 +1158,36 @@ class GSTR1ExcelProcessor:
                 self.warnings.append(f"Failed to process B2CL sheet: {str(e)}")
         
         # Process B2CS sheet
-        if GovExcelSheetName.B2CS.value in excel_file.sheet_names:
+        b2cs_sheet_name = GovExcelSheetName.B2CS.value
+        b2cs_idx = None
+        for i, sheet_lower in enumerate(sheet_names_lower):
+            if b2cs_sheet_name == sheet_lower:
+                b2cs_idx = i
+                break
+        
+        if b2cs_idx is not None:
             try:
-                df = pd.read_excel(excel_file, sheet_name=GovExcelSheetName.B2CS.value)
+                df = pd.read_excel(excel_file, sheet_name=excel_file.sheet_names[b2cs_idx], header=SUMMARY_ROWS_TO_SKIP)
+                df = df.dropna(how='all').reset_index(drop=True)
                 logger.info(f"Processing B2CS sheet: {len(df)} rows")
                 result["b2cs"] = self.process_b2cs_sheet(df)
-                logger.info(f"Processed {len(result['b2cs'])} valid B2CS invoices")
+                logger.info(f"Processed {len(result['b2cs'])} valid B2CS entries")
             except Exception as e:
                 logger.error(f"Failed to process B2CS sheet: {str(e)}")
                 self.warnings.append(f"Failed to process B2CS sheet: {str(e)}")
         
         # Process Export sheet
-        if GovExcelSheetName.EXP.value in excel_file.sheet_names:
+        exp_sheet_name = GovExcelSheetName.EXP.value
+        exp_idx = None
+        for i, sheet_lower in enumerate(sheet_names_lower):
+            if exp_sheet_name in sheet_lower or sheet_lower in exp_sheet_name:
+                exp_idx = i
+                break
+        
+        if exp_idx is not None:
             try:
-                df = pd.read_excel(excel_file, sheet_name=GovExcelSheetName.EXP.value)
+                df = pd.read_excel(excel_file, sheet_name=excel_file.sheet_names[exp_idx], header=SUMMARY_ROWS_TO_SKIP)
+                df = df.dropna(how='all').reset_index(drop=True)
                 logger.info(f"Processing Export sheet: {len(df)} rows")
                 result["export"] = self.process_export_sheet(df)
                 logger.info(f"Processed {len(result['export'])} valid Export invoices")

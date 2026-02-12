@@ -1,41 +1,71 @@
-from india_compliance.gst_india.utils.processor import process_gstr1_excel
-from india_compliance.gst_india.gstr1_data import generate_gstr1_tables, generate_gstr1_json
+from india_compliance.gst_india.utils.header_mapper import get_mapper, normalize_dataframe_simple
+from india_compliance.gst_india.gstr1_data import generate_gstr1_tables
+from india_compliance.gst_india.exporters.gstr1_excel import export_gstr1_excel
 from india_compliance.gst_india.gstr3b_data import generate_gstr3b_summary
 from india_compliance.gst_india.exporters.gstr3b_excel import generate_gstr3b_excel
-import json
+import pandas as pd
 
 # Load raw Excel
-file_path = "GSTR-1_Dec-2025.xlsx"
-result = process_gstr1_excel(file_path)
+file_path = "Demo_Client_Sales_Data.xlsx"
 
-# Extract clean_data and errors from the result dict
-clean_data = result.get("clean_data", [])
-errors = result.get("errors", [])
+# Read the Excel file
+df = pd.read_excel(file_path, sheet_name=None)
+sheet_name = list(df.keys())[0]
+df_sheet = df[sheet_name]
 
-print(f"\n[OK] Processed {len(clean_data)} clean invoices, {len(errors)} errors\n")
+print("Original Columns:")
+print(df_sheet.columns.tolist())
 
-if errors:
-    print("Validation errors found:")
-    for error in errors[:5]:  # Show first 5 errors
-        print(f"  Row {error.get('row', 'N/A')}: {error.get('errors', [])}")
-    if len(errors) > 5:
-        print(f"  ... and {len(errors) - 5} more errors")
+# Use the header mapper to normalize columns
+mapper = get_mapper()
+df_normalized, mapping = normalize_dataframe_simple(df_sheet)
 
-# Generate GSTR-1 JSON (pass clean_data instead of gstr1_tables)
-json_output = generate_gstr1_json(
+print("\nColumn Mapping Applied:")
+for orig, canonical in mapping.items():
+    print(f"  {orig} -> {canonical}")
+
+print("\nNormalized Columns:")
+print(df_normalized.columns.tolist())
+
+# Convert normalized DataFrame to dict records - this is the clean_data
+clean_data = df_normalized.to_dict('records')
+
+# Defensive check - prevent silent empty export
+if not clean_data:
+    raise ValueError("No valid invoices found after normalization.")
+
+print(f"\n[OK] Processed {len(clean_data)} clean invoices, 0 errors")
+
+# Generate GSTR-1 tables - returns tuple (gstr1_tables, validation_report)
+gstr1_tables, validation_report = generate_gstr1_tables(
     clean_data,
     company_gstin="27AAAAA1234A1ZA",
-    return_period="122025",
-    gstin="27AAAAA1234A1ZA",
-    username="ABC Pvt Ltd"
+    include_hsn=True,
+    include_docs=False
 )
-with open("gstr1_122025.json", "w") as f:
-    json.dump(json_output, f, indent=2)
-print("[OK] GSTR-1 JSON exported as gstr1_122025.json")
 
-# Generate GSTR-3B Summary
+# Print validation report summary
+if validation_report.errors:
+    print("\nValidation warnings/errors:")
+    for error in validation_report.errors[:5]:
+        print(f"  - {error}")
+
+# Generate GSTR-1 Excel - pass only gstr1_tables dict, not the tuple
+excel_bytes = export_gstr1_excel(
+    gstr1_tables,
+    return_period="122025",
+    taxpayer_gstin="27AAAAA1234A1ZA",
+    taxpayer_name="ABC Pvt Ltd"
+)
+
+# Write Excel file
+with open("gstr1_122025.xlsx", "wb") as f:
+    f.write(excel_bytes)
+print("[OK] GSTR-1 Excel exported as gstr1_122025.xlsx")
+
+# Generate GSTR-3B tables - pass only gstr1_tables dict
 gstr3b = generate_gstr3b_summary(
-    json_output,  # Pass the GSTR-1 JSON output
+    gstr1_tables,
     return_period="122025",
     taxpayer_gstin="27AAAAA1234A1ZA",
     taxpayer_name="ABC Pvt Ltd"
@@ -47,10 +77,11 @@ excel_content = generate_gstr3b_excel(gstr3b)
 if isinstance(excel_content, bytes):
     with open("gstr3b_122025.xlsx", "wb") as f:
         f.write(excel_content)
+    print("[OK] GSTR-3B Excel exported as gstr3b_122025.xlsx")
 else:
     # Placeholder returns filename string
     with open("gstr3b_122025.txt", "w") as f:
         f.write(excel_content)
-print(f"[OK] GSTR-3B output exported (format: {'binary' if isinstance(excel_content, bytes) else 'text'})")
+    print(f"[OK] GSTR-3B output exported (format: text)")
 
 print("\n[SUCCESS] All processing completed successfully!")

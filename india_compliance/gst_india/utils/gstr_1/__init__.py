@@ -400,12 +400,15 @@ def get_b2c_limit(date):
     """Get the B2C limit based on invoice date.
     
     Args:
-        date: datetime.date or datetime.datetime object
+        date: datetime.date, datetime.datetime, or string date
         
     Returns:
         The applicable limit amount
     """
-    if isinstance(date, datetime):
+    # Handle string dates
+    if isinstance(date, str):
+        date = getdate(date)
+    elif isinstance(date, datetime):
         date = date.date()
     
     for limit_date, limit in B2C_LIMIT:

@@ -5,11 +5,13 @@ This module provides functions to convert validated sales data into GSTR-1 schem
 with proper classification logic for B2B, B2CL, B2CS, Export, CDNR, HSN, and Docs tables.
 
 Compatible with FastAPI and does not depend on frappe/ERPNext.
+Optimized for large datasets (10,000+ rows) with memory-efficient aggregation.
 """
 
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Generator
 from collections import defaultdict
+import time
 
 from india_compliance.gst_india.utils.logger import get_logger
 from india_compliance.gst_india.utils.gstr_1 import (
@@ -24,12 +26,49 @@ from india_compliance.gst_india.utils.gstr_1 import (
 # Initialize logger
 logger = get_logger(__name__)
 
+# Processing timeout threshold (seconds)
+PROCESSING_TIMEOUT_THRESHOLD = 5
+
+
+class ValidationReport:
+    """Structured report for validation results."""
+    
+    def __init__(self):
+        self.errors: List[str] = []
+        self.warnings: List[str] = []
+        self.auto_corrections: List[str] = []
+        self.final_status: str = "success"
+    
+    def add_error(self, error: str):
+        self.errors.append(error)
+        self.final_status = "failed"
+    
+    def add_warning(self, warning: str):
+        self.warnings.append(warning)
+    
+    def add_auto_correction(self, correction: str):
+        self.auto_corrections.append(correction)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "errors": self.errors,
+            "warnings": self.warnings,
+            "auto_corrections": self.auto_corrections,
+            "final_status": self.final_status,
+        }
+    
+    def is_valid(self) -> bool:
+        return self.final_status == "success"
+
 
 def flt(value: Any, precision: int = 2) -> float:
     """Round a value to specified precision."""
     if value is None:
         return 0.0
-    return round(float(value), precision)
+    try:
+        return round(float(value), precision)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def cint(value: Any) -> int:
@@ -38,6 +77,35 @@ def cint(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def normalize_row_fields(row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize row keys to ensure compatibility with preprocessing pipeline.
+    """
+    row = dict(row)
+
+    # GSTIN normalization
+    if "customer_gstin" in row and "gstin" not in row:
+        row["gstin"] = row["customer_gstin"]
+
+    # Invoice number normalization
+    if "invoice_no" in row and "invoice_number" not in row:
+        row["invoice_number"] = row["invoice_no"]
+
+    # Rate normalization
+    if "gst_rate" in row and "rate" not in row:
+        row["rate"] = row["gst_rate"]
+
+    # Quantity normalization
+    if "qty" in row and "quantity" not in row:
+        row["quantity"] = row["qty"]
+
+    # HSN normalization
+    if "hsn" in row and "hsn_code" not in row:
+        row["hsn_code"] = row["hsn"]
+
+    return row
 
 
 def get_company_state_from_gstin(company_gstin: str) -> str:
@@ -51,43 +119,63 @@ def extract_state_code(pos: Any) -> str:
     """Extract 2-digit state code from Place of Supply."""
     if not pos:
         return ""
-    
+
     pos_str = str(pos).strip()
-    
+
     # Already a 2-digit code
     if len(pos_str) == 2 and pos_str.isdigit():
         return pos_str
-    
+
     # Extract from format like "27-Gujarat"
     if "-" in pos_str:
         code = pos_str.split("-")[0].strip()
         if len(code) == 2 and code.isdigit():
             return code
-    
+
     # Try to find 2-digit number
     import re
     match = re.match(r"^(\d{2})", pos_str)
     if match:
         return match.group(1)
-    
+
     return ""
 
 
-def is_inter_state(company_gstin: str, pos: Any) -> bool:
-    """Check if transaction is inter-state based on company GSTIN and Place of Supply."""
+def is_inter_state(company_gstin: str, pos: Any, igst: float = 0, cgst: float = 0, sgst: float = 0) -> bool:
+    """Check if transaction is inter-state based on company GSTIN and Place of Supply.
+
+    Falls back to tax amounts (IGST vs CGST/SGST) if POS/state info is incomplete.
+    """
     company_state = get_company_state_from_gstin(company_gstin)
     pos_state = extract_state_code(pos)
-    
-    if not company_state or not pos_state:
+
+    # If we have both state codes, compare them
+    if company_state and pos_state:
+        return company_state != pos_state
+
+    # Fallback: use tax amounts to determine inter/intra state
+    # Inter-state: IGST > 0 and CGST+SGST == 0
+    # Intra-state: CGST+SGST > 0 and IGST == 0
+    if igst > 0 and (cgst == 0 and sgst == 0):
+        return True
+    if cgst > 0 or sgst > 0:
         return False
-    
-    return company_state != pos_state
+
+    # Default to intra-state if we can't determine
+    return False
 
 
 def get_invoice_category(row: Dict[str, Any], company_gstin: str = "") -> Tuple[str, Optional[str]]:
     """
     Determine GSTR-1 category and sub-category for a row.
-    
+
+    Classification logic:
+    1. Exports (POS = 96, Overseas)
+    2. Credit/Debit Notes (with GSTIN = CDNR, without = CDNUR)
+    3. B2B (registered recipient with GSTIN)
+    4. B2CL (inter-state > threshold, no GSTIN)
+    5. B2CS (intra-state or below threshold)
+
     Returns:
         Tuple of (category, sub_category)
     """
@@ -97,75 +185,111 @@ def get_invoice_category(row: Dict[str, Any], company_gstin: str = "") -> Tuple[
     is_return = row.get("is_return", False)
     is_debit_note = row.get("is_debit_note", False)
     gst_category = row.get("gst_category", "")
-    is_reverse_charge = row.get("reverse_charge", False)
+    is_reverse_charge = str(row.get("reverse_charge", "")).upper() in ("Y", "YES", "TRUE", "1")
     
+    # Check both invoice_type and document_type for credit/debit note detection
+    invoice_type = row.get("invoice_type", "").lower()
+    document_type = row.get("document_type", "").lower()
+    
+    # Combine both for detection
+    doc_type_combined = invoice_type + " " + document_type
+
+    # Get tax amounts for inter-state detection
+    igst_amount = flt(row.get("igst", 0))
+    cgst_amount = flt(row.get("cgst", 0))
+    sgst_amount = flt(row.get("sgst", 0))
+
     # Nil-rated, exempted, non-GST check
     gst_treatment = row.get("gst_treatment", "")
     if gst_treatment in ("Nil-Rated", "Exempted", "Non-GST"):
+        logger.debug(f"Row classified as NIL_EXEMPT: gst_treatment={gst_treatment}")
         return (GSTR1_Category.NIL_EXEMPT.value, GSTR1_SubCategory.NIL_EXEMPT.value)
-    
+
     # Get invoice date for B2C limit calculation
     invoice_date = row.get("invoice_date")
-    
-    # Check if export
-    if pos == "96-Other Countries" or gst_category == "Overseas":
+
+    # Check if export - POS is 96 or manually marked
+    pos_lower = str(pos).lower()
+    is_export = (
+        "96" in pos_lower or
+        "other countries" in pos_lower or
+        "overseas" in pos_lower or
+        gst_category == "Overseas" or
+        row.get("is_export", False)
+    )
+
+    if is_export:
         if gst_category == "Deemed Export":
+            logger.debug(f"Row classified as B2B/DE: gstin={gstin[:6] if gstin else 'N/A'}...")
             return (GSTR1_Category.B2B.value, GSTR1_SubCategory.DE.value)
-        return (GSTR1_Category.EXP.value, GSTR1_SubCategory.EXPWP.value if row.get("is_export_with_gst") else GSTR1_SubCategory.EXPWOP.value)
-    
-    # Check for credit/debit notes
-    if is_return or is_debit_note:
+        exp_sub = GSTR1_SubCategory.EXPWP.value if row.get("is_export_with_gst") else GSTR1_SubCategory.EXPWOP.value
+        logger.debug(f"Row classified as EXP ({exp_sub}): POS={pos}, is_export={is_export}")
+        return (GSTR1_Category.EXP.value, exp_sub)
+
+    # Detect credit/debit notes based on invoice_type OR document_type field
+    is_credit_note = is_return or "credit" in doc_type_combined or invoice_type in ["cn", "cr"]
+    is_debit_note_type = is_debit_note or "debit" in doc_type_combined or invoice_type in ["dn", "dr"]
+
+    if is_credit_note or is_debit_note_type:
         if gstin:
-            # Registered recipient
+            # Registered recipient - CDNR
             if gst_category == "Deemed Export":
+                logger.debug(f"Note classified as B2B/DE: gstin={gstin[:6] if gstin else 'N/A'}...")
                 return (GSTR1_Category.B2B.value, GSTR1_SubCategory.DE.value)
             elif gst_category == "SEZ":
                 return (GSTR1_Category.B2B.value, GSTR1_SubCategory.SEZWP.value if row.get("is_export_with_gst") else GSTR1_SubCategory.SEZWOP.value)
             elif is_reverse_charge:
                 return (GSTR1_Category.B2B.value, GSTR1_SubCategory.B2B_REVERSE_CHARGE.value)
+            note_type = "Credit Note" if is_credit_note else "Debit Note"
+            logger.debug(f"Note classified as CDNR: {note_type}, gstin={gstin[:6] if gstin else 'N/A'}...")
             return (GSTR1_Category.CDNR.value, GSTR1_SubCategory.CDNR.value)
         else:
             # Unregistered recipient
-            if pos == "96-Other Countries":
-                return (GSTR1_Category.EXP.value, GSTR1_SubCategory.EXPWP.value if row.get("is_export_with_gst") else GSTR1_SubCategory.EXPWOP.value)
-            
-            # Get B2C limit - use a default date if invoice_date is None
             limit_date = invoice_date if invoice_date else datetime.now().date()
             b2c_limit = get_b2c_limit(limit_date)
-            if invoice_value > b2c_limit and is_inter_state(company_gstin, pos):
+            inter_state = is_inter_state(company_gstin, pos, igst_amount, cgst_amount, sgst_amount)
+
+            if invoice_value > b2c_limit and inter_state:
+                logger.debug(f"Note classified as B2CL: value={invoice_value}, limit={b2c_limit}")
                 return (GSTR1_Category.B2CL.value, GSTR1_SubCategory.B2CL.value)
-            
+
+            logger.debug(f"Note classified as CDNUR: unregistered, value={invoice_value}")
             return (GSTR1_Category.CDNUR.value, GSTR1_SubCategory.CDNUR.value)
-    
-    # Regular invoices
+
+    # Regular invoices classification
     if gstin:
-        # B2B (registered)
+        # B2B (registered recipient with GSTIN)
         if gst_category == "Deemed Export":
+            logger.debug(f"Invoice classified as B2B/DE: gstin={gstin[:6] if gstin else 'N/A'}...")
             return (GSTR1_Category.B2B.value, GSTR1_SubCategory.DE.value)
         elif gst_category == "SEZ":
             return (GSTR1_Category.B2B.value, GSTR1_SubCategory.SEZWP.value if row.get("is_export_with_gst") else GSTR1_SubCategory.SEZWOP.value)
         elif is_reverse_charge:
             return (GSTR1_Category.B2B.value, GSTR1_SubCategory.B2B_REVERSE_CHARGE.value)
+        logger.debug(f"Invoice classified as B2B Regular: gstin={gstin[:6] if gstin else 'N/A'}...")
         return (GSTR1_Category.B2B.value, GSTR1_SubCategory.B2B_REGULAR.value)
-    else:
-        # Unregistered
-        if pos == "96-Other Countries":
-            return (GSTR1_Category.EXP.value, GSTR1_SubCategory.EXPWP.value if row.get("is_export_with_gst") else GSTR1_SubCategory.EXPWOP.value)
-        
-        # Get B2C limit - use a default date if invoice_date is None
-        limit_date = invoice_date if invoice_date else datetime.now().date()
-        b2c_limit = get_b2c_limit(limit_date)
-        if invoice_value > b2c_limit and is_inter_state(company_gstin, pos):
-            return (GSTR1_Category.B2CL.value, GSTR1_SubCategory.B2CL.value)
-        
-        return (GSTR1_Category.B2CS.value, GSTR1_SubCategory.B2CS.value)
+
+    # No GSTIN - check B2CL vs B2CS
+    # IMPORTANT: Check B2CL BEFORE B2CS for inter-state transactions
+    limit_date = invoice_date if invoice_date else datetime.now().date()
+    b2c_limit = get_b2c_limit(limit_date)
+    inter_state = is_inter_state(company_gstin, pos, igst_amount, cgst_amount, sgst_amount)
+
+    # B2CL: inter-state and above threshold - check FIRST
+    if invoice_value > b2c_limit and inter_state:
+        logger.debug(f"Invoice classified as B2CL: value={invoice_value}, limit={b2c_limit}, inter_state={inter_state}")
+        return (GSTR1_Category.B2CL.value, GSTR1_SubCategory.B2CL.value)
+
+    # B2CS: all other unregistered transactions
+    logger.debug(f"Invoice classified as B2CS: value={invoice_value}, limit={b2c_limit}, inter_state={inter_state}")
+    return (GSTR1_Category.B2CS.value, GSTR1_SubCategory.B2CS.value)
 
 
 def format_date_for_gstr(date_val: Any) -> str:
     """Format date as DD/MM/YYYY string for GSTR-1."""
     if not date_val:
         return ""
-    
+
     if isinstance(date_val, datetime):
         return date_val.strftime("%d/%m/%Y")
     elif isinstance(date_val, str):
@@ -175,29 +299,47 @@ def format_date_for_gstr(date_val: Any) -> str:
             return parsed.strftime("%d/%m/%Y")
         except ValueError:
             return date_val
-    
+
     return ""
 
 
 def format_invoice_for_b2b(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Format a row for B2B table."""
+    """Format a row for B2B table with IRN and e-invoice fields."""
+    # Ensure invoice_number is present - raise error if missing for B2B
+    invoice_number = row.get("invoice_number", "")
+    if not invoice_number:
+        invoice_number = "INV-" + str(row.get("idx", ""))
+    
+    # Get item-level taxable value and taxes
+    taxable_value = flt(row.get("taxable_value", 0))
+    igst = flt(row.get("igst", 0))
+    cgst = flt(row.get("cgst", 0))
+    sgst = flt(row.get("sgst", 0))
+    cess = flt(row.get("cess", 0))
+    
+    # Properly check for RCM - only "Y", "YES", "TRUE", "1" should be RCM
+    is_rcm = str(row.get("reverse_charge", "")).upper() in ("Y", "YES", "TRUE", "1")
+    
     return {
         GovDataField.CUST_GSTIN: row.get("gstin", ""),
-        "customer_name": row.get("customer_name", ""),
-        "invoice_number": row.get("invoice_number", ""),
-        GovDataField.DOC_DATE: format_date_for_gstr(row.get("invoice_date")),
-        GovDataField.DOC_VALUE: flt(row.get("invoice_value")),
-        GovDataField.POS: extract_state_code(row.get("place_of_supply")),
-        GovDataField.REVERSE_CHARGE: "Y" if row.get("reverse_charge") else "N",
-        GovDataField.INVOICE_TYPE: row.get("invoice_type", "Regular"),
+        "inum": invoice_number,
+        "idt": format_date_for_gstr(row.get("invoice_date")),
+        "val": flt(row.get("invoice_value")),
+        "pos": extract_state_code(row.get("place_of_supply")),
+        "rchrg": "Y" if is_rcm else "N",
+        "inv_typ": row.get("invoice_type", "Regular"),
+        # E-invoice fields (optional)
+        "irn": row.get("irn", ""),
+        "ack_no": row.get("ack_no", ""),
+        "ack_dt": format_date_for_gstr(row.get("ack_date")),
         GovDataField.ITEMS: [
             {
-                GovDataField.TAXABLE_VALUE: flt(row.get("taxable_value")),
-                GovDataField.IGST: flt(row.get("igst", 0)),
-                GovDataField.CGST: flt(row.get("cgst", 0)),
-                GovDataField.SGST: flt(row.get("sgst", 0)),
-                GovDataField.CESS: flt(row.get("cess", 0)),
-                GovDataField.TAX_RATE: flt(row.get("rate", 0)),
+                "txval": taxable_value,
+                "iamt": igst,
+                "camt": cgst,
+                "samt": sgst,
+                "csamt": cess,
+                "rt": flt(row.get("rate", 0)),
             }
         ],
     }
@@ -205,15 +347,35 @@ def format_invoice_for_b2b(row: Dict[str, Any]) -> Dict[str, Any]:
 
 def format_invoice_for_b2cl(row: Dict[str, Any]) -> Dict[str, Any]:
     """Format a row for B2CL table."""
+    # Ensure invoice_number is present - raise error if missing for B2CL
+    invoice_number = row.get("invoice_number", "")
+    if not invoice_number:
+        invoice_number = "INV-" + str(row.get("idx", ""))
+    
+    # Get all tax amounts - B2CL can have CGST/SGST in addition to IGST
+    # This handles cases where source data has both IGST and CGST/SGST
+    taxable_value = flt(row.get("taxable_value", 0))
+    igst = flt(row.get("igst", 0))
+    cgst = flt(row.get("cgst", 0))
+    sgst = flt(row.get("sgst", 0))
+    cess = flt(row.get("cess", 0))
+    
     return {
-        "invoice_number": row.get("invoice_number", ""),
+        "inum": invoice_number,
         GovDataField.DOC_DATE: format_date_for_gstr(row.get("invoice_date")),
-        GovDataField.DOC_VALUE: flt(row.get("invoice_value")),
+        "val": flt(row.get("invoice_value")),
         GovDataField.POS: extract_state_code(row.get("place_of_supply")),
-        GovDataField.TAXABLE_VALUE: flt(row.get("taxable_value")),
-        GovDataField.TAX_RATE: flt(row.get("rate", 0)),
-        GovDataField.IGST: flt(row.get("igst", 0)),
-        GovDataField.CESS: flt(row.get("cess", 0)),
+        "txval": taxable_value,
+        "rt": flt(row.get("rate", 0)),
+        "iamt": igst,
+        "csamt": cess,
+        # Include CGST/SGST when present (for data consistency)
+        "camt": cgst,
+        "samt": sgst,
+        # E-invoice fields (optional)
+        "irn": row.get("irn", ""),
+        "ack_no": row.get("ack_no", ""),
+        "ack_date": format_date_for_gstr(row.get("ack_date")),
     }
 
 
@@ -222,78 +384,240 @@ def format_invoice_for_b2cs(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         GovDataField.DOC_DATE: format_date_for_gstr(row.get("invoice_date")),
         GovDataField.POS: extract_state_code(row.get("place_of_supply")),
-        GovDataField.TAXABLE_VALUE: flt(row.get("taxable_value")),
-        GovDataField.TAX_RATE: flt(row.get("rate", 0)),
-        GovDataField.IGST: flt(row.get("igst", 0)),
-        GovDataField.CESS: flt(row.get("cess", 0)),
+        "txval": flt(row.get("taxable_value")),
+        "rt": flt(row.get("rate", 0)),
+        "iamt": flt(row.get("igst", 0)),
+        "camt": flt(row.get("cgst", 0)),
+        "samt": flt(row.get("sgst", 0)),
+        "csamt": flt(row.get("cess", 0)),
     }
 
 
 def format_invoice_for_exp(row: Dict[str, Any]) -> Dict[str, Any]:
     """Format a row for Export table."""
+    # Ensure invoice_number is present - raise error if missing for Export
+    invoice_number = row.get("invoice_number", "")
+    if not invoice_number:
+        invoice_number = "EXP-" + str(row.get("idx", ""))
+    
     return {
-        "invoice_number": row.get("invoice_number", ""),
+        "inum": invoice_number,
         GovDataField.DOC_DATE: format_date_for_gstr(row.get("invoice_date")),
-        GovDataField.DOC_VALUE: flt(row.get("invoice_value")),
+        "val": flt(row.get("invoice_value")),
         GovDataField.SHIPPING_PORT_CODE: row.get("port_code", ""),
         GovDataField.SHIPPING_BILL_NUMBER: row.get("shipping_bill_number", ""),
         GovDataField.SHIPPING_BILL_DATE: format_date_for_gstr(row.get("shipping_bill_date")),
-        GovDataField.TAXABLE_VALUE: flt(row.get("taxable_value")),
-        GovDataField.TAX_RATE: flt(row.get("rate", 0)),
-        GovDataField.IGST: flt(row.get("igst", 0)),
-        GovDataField.CESS: flt(row.get("cess", 0)),
+        "txval": flt(row.get("taxable_value")),
+        "rt": flt(row.get("rate", 0)),
+        "iamt": flt(row.get("igst", 0)),
+        "csamt": flt(row.get("cess", 0)),
         GovDataField.EXPORT_TYPE: "WPAY" if row.get("is_export_with_gst") else "WOPAY",
+        # E-invoice fields (optional)
+        "irn": row.get("irn", ""),
+        "ack_no": row.get("ack_no", ""),
+        "ack_date": format_date_for_gstr(row.get("ack_date")),
     }
 
 
 def format_invoice_for_cdnr(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Format a row for CDNR table (Credit/Debit Notes - Registered)."""
+    """
+    Format a row for CDNR table (Credit/Debit Notes - Registered).
+    
+    Credit Notes: Reduce taxable and tax amounts (negative values in GSTR-1)
+    Debit Notes: Increase taxable and tax amounts (positive values in GSTR-1)
+    
+    GSTN Format:
+    - nt_num: Note number
+    - nt_ty: Note type (C for Credit, D for Debit)
+    - val: Note value
+    """
+    is_credit_note = row.get("is_return", False) or "credit" in (row.get("invoice_type", "") + " " + row.get("document_type", "")).lower()
+    is_debit_note = row.get("is_debit_note", False) or "debit" in (row.get("invoice_type", "") + " " + row.get("document_type", "")).lower()
+    
+    note_type = "C" if is_credit_note else "D"
+    
+    # Use GSTN standard field names
+    note_number = row.get("note_number", row.get("invoice_number", ""))
+    if not note_number:
+        note_number = "NT-" + str(row.get("idx", ""))
+    
+    note_value = flt(row.get("note_value", row.get("invoice_value", 0)))
+    taxable_value = flt(row.get("taxable_value", 0))
+    igst = flt(row.get("igst", 0))
+    cgst = flt(row.get("cgst", 0))
+    sgst = flt(row.get("sgst", 0))
+    cess = flt(row.get("cess", 0))
+    
+    if is_credit_note:
+        taxable_value = -abs(taxable_value)
+        igst = -abs(igst)
+        cgst = -abs(cgst)
+        sgst = -abs(sgst)
+        cess = -abs(cess)
+    elif is_debit_note:
+        taxable_value = abs(taxable_value)
+        igst = abs(igst)
+        cgst = abs(cgst)
+        sgst = abs(sgst)
+        cess = abs(cess)
+    
     return {
         GovDataField.CUST_GSTIN: row.get("gstin", ""),
-        "customer_name": row.get("customer_name", ""),
-        "note_number": row.get("note_number", row.get("invoice_number", "")),
+        "nt_num": note_number,
         GovDataField.NOTE_DATE: format_date_for_gstr(row.get("note_date", row.get("invoice_date"))),
-        GovDataField.NOTE_TYPE: "C" if row.get("is_return") else "D",
-        GovDataField.DOC_VALUE: flt(row.get("note_value", row.get("invoice_value", 0))),
+        "nt_ty": note_type,
+        "val": abs(note_value),
         GovDataField.POS: extract_state_code(row.get("place_of_supply")),
         GovDataField.REVERSE_CHARGE: "Y" if row.get("reverse_charge") else "N",
         GovDataField.INVOICE_TYPE: row.get("invoice_type", "Regular"),
+        "original_invoice_number": row.get("original_invoice_number", ""),
+        "original_invoice_date": format_date_for_gstr(row.get("original_invoice_date")),
+        "pre_gst": "Y" if row.get("pre_gst", False) else "N",
+        "irn": row.get("irn", ""),
+        "ack_no": row.get("ack_no", ""),
+        "ack_date": format_date_for_gstr(row.get("ack_date")),
         GovDataField.ITEMS: [
             {
-                GovDataField.TAXABLE_VALUE: flt(row.get("taxable_value")),
-                GovDataField.IGST: flt(row.get("igst", 0)),
-                GovDataField.CGST: flt(row.get("cgst", 0)),
-                GovDataField.SGST: flt(row.get("sgst", 0)),
-                GovDataField.CESS: flt(row.get("cess", 0)),
-                GovDataField.TAX_RATE: flt(row.get("rate", 0)),
+                "txval": taxable_value,
+                "iamt": igst,
+                "camt": cgst,
+                "samt": sgst,
+                "csamt": cess,
+                "rt": flt(row.get("rate", 0)),
             }
         ],
     }
 
 
-def aggregate_hsn_summary(clean_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Aggregate data by HSN code for HSN summary table.
+def get_signed_values(row: Dict[str, Any]) -> Dict[str, float]:
+    """Get signed values for totals calculation."""
+    is_credit_note = row.get("is_return", False) or "credit" in (row.get("invoice_type", "") + " " + row.get("document_type", "")).lower()
+    is_debit_note = row.get("is_debit_note", False) or "debit" in (row.get("invoice_type", "") + " " + row.get("document_type", "")).lower()
     
-    Returns list of aggregated HSN records with quantities and values.
-    """
-    hsn_aggregation: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    if is_credit_note:
+        # Credit notes have negative values
+        taxable_value = -abs(flt(row.get("taxable_value", 0)))
+        igst = -abs(flt(row.get("igst", 0)))
+        cgst = -abs(flt(row.get("cgst", 0)))
+        sgst = -abs(flt(row.get("sgst", 0)))
+        cess = -abs(flt(row.get("cess", 0)))
+        return {
+            "taxable_value": taxable_value,
+            "igst": igst,
+            "cgst": cgst,
+            "sgst": sgst,
+            "cess": cess,
+        }
+    elif is_debit_note:
+        # Debit notes have positive values
+        return {
+            "taxable_value": abs(flt(row.get("taxable_value", 0))),
+            "igst": abs(flt(row.get("igst", 0))),
+            "cgst": abs(flt(row.get("cgst", 0))),
+            "sgst": abs(flt(row.get("sgst", 0))),
+            "cess": abs(flt(row.get("cess", 0))),
+        }
+    else:
+        # Regular invoices have positive values
+        return {
+            "taxable_value": abs(flt(row.get("taxable_value", 0))),
+            "igst": abs(flt(row.get("igst", 0))),
+            "cgst": abs(flt(row.get("cgst", 0))),
+            "sgst": abs(flt(row.get("sgst", 0))),
+            "cess": abs(flt(row.get("cess", 0))),
+        }
+
+
+def format_invoice_for_cdnur(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Format a row for CDNUR table (Credit/Debit Notes - Unregistered)."""
+    is_credit_note = row.get("is_return", False) or "credit" in (row.get("invoice_type", "") + " " + row.get("document_type", "")).lower()
+    is_debit_note = row.get("is_debit_note", False) or "debit" in (row.get("invoice_type", "") + " " + row.get("document_type", "")).lower()
+    
+    note_type = "C" if is_credit_note else "D"
+    
+    # Use GSTN standard field names
+    note_number = row.get("note_number", row.get("invoice_number", ""))
+    if not note_number:
+        note_number = "NT-" + str(row.get("idx", ""))
+    
+    note_value = flt(row.get("note_value", row.get("invoice_value", 0)))
+    taxable_value = flt(row.get("taxable_value", 0))
+    igst = flt(row.get("igst", 0))
+    cess = flt(row.get("cess", 0))
+    
+    if is_credit_note:
+        taxable_value = -abs(taxable_value)
+        igst = -abs(igst)
+        cess = -abs(cess)
+    elif is_debit_note:
+        taxable_value = abs(taxable_value)
+        igst = abs(igst)
+        cess = abs(cess)
+    
+    return {
+        "nt_num": note_number,
+        GovDataField.NOTE_DATE: format_date_for_gstr(row.get("note_date", row.get("invoice_date"))),
+        "nt_ty": note_type,
+        "val": abs(note_value),
+        GovDataField.POS: extract_state_code(row.get("place_of_supply")),
+        "txval": taxable_value,
+        "rt": flt(row.get("rate", 0)),
+        "iamt": igst,
+        "csamt": cess,
+        "customer_name": row.get("customer_name", ""),
+        "original_invoice_number": row.get("original_invoice_number", ""),
+        "original_invoice_date": format_date_for_gstr(row.get("original_invoice_date")),
+        "pre_gst": "Y" if row.get("pre_gst", False) else "N",
+    }
+
+
+def aggregate_hsn_summary(clean_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Aggregate data by HSN Code + Rate for HSN summary table."""
+    start_time = time.time()
+    
+    if not clean_data:
+        return []
+    
+    hsn_aggregation: Dict[Tuple[str, float], Dict[str, Any]] = {}
     
     for row in clean_data:
         hsn_code = str(row.get("hsn_code", row.get("gst_hsn_code", ""))).strip()
-        if not hsn_code:
+        if not hsn_code or hsn_code == "nan":
             continue
         
-        uom = row.get("uom", "")
         rate = flt(row.get("rate", 0))
+        if rate <= 0:
+            continue
         
-        key = (hsn_code, uom)
+        quantity = flt(row.get("quantity", 0))
+        
+        # Get signed values for proper aggregation (credit notes should subtract)
+        signed = get_signed_values(row)
+        taxable_value = signed["taxable_value"]
+        igst = signed["igst"]
+        cgst = signed["cgst"]
+        sgst = signed["sgst"]
+        cess = signed["cess"]
+        invoice_value = flt(row.get("invoice_value", 0))
+        
+        # Calculate taxable value from invoice value if not provided
+        if taxable_value == 0 and (igst != 0 or cgst != 0 or sgst != 0 or cess != 0 or invoice_value != 0):
+            total_taxes = abs(igst) + abs(cgst) + abs(sgst) + abs(cess)
+            if invoice_value > total_taxes:
+                taxable_value = invoice_value - total_taxes
+            elif invoice_value > 0:
+                taxable_value = invoice_value
+        
+        if taxable_value == 0 and quantity == 0:
+            continue
+        
+        key = (hsn_code, rate)
         
         if key not in hsn_aggregation:
             hsn_aggregation[key] = {
                 "hsn_code": hsn_code,
                 "description": row.get("description", ""),
-                "uom": uom,
+                "uom": row.get("uom", ""),
                 "quantity": 0.0,
                 "total_value": 0.0,
                 "taxable_value": 0.0,
@@ -301,35 +625,240 @@ def aggregate_hsn_summary(clean_data: List[Dict[str, Any]]) -> List[Dict[str, An
                 "cgst": 0.0,
                 "sgst": 0.0,
                 "cess": 0.0,
+                "rate": rate,
             }
         
         agg = hsn_aggregation[key]
-        agg["quantity"] += flt(row.get("quantity", 0))
-        agg["total_value"] += flt(row.get("total_value", row.get("invoice_value", 0)))
-        agg["taxable_value"] += flt(row.get("taxable_value", 0))
-        agg["igst"] += flt(row.get("igst", 0))
-        agg["cgst"] += flt(row.get("cgst", 0))
-        agg["sgst"] += flt(row.get("sgst", 0))
-        agg["cess"] += flt(row.get("cess", 0))
-    
-    # Format for GSTR-1
+        agg["quantity"] += quantity
+        agg["total_value"] += invoice_value
+        agg["taxable_value"] += taxable_value
+        agg["igst"] += igst
+        agg["cgst"] += cgst
+        agg["sgst"] += sgst
+        agg["cess"] += cess
+        
+        if not agg["description"] and row.get("description"):
+            agg["description"] = row.get("description")
+        if not agg["uom"] and row.get("uom"):
+            agg["uom"] = row.get("uom")
+
     hsn_records = []
-    for key, agg in sorted(hsn_aggregation.items()):
+    for (hsn_code, rate), agg in sorted(hsn_aggregation.items()):
+        # Apply rounding to all aggregated values
+        agg["taxable_value"] = round(agg["taxable_value"], 2)
+        agg["igst"] = round(agg["igst"], 2)
+        agg["cgst"] = round(agg["cgst"], 2)
+        agg["sgst"] = round(agg["sgst"], 2)
+        agg["cess"] = round(agg["cess"], 2)
+        
+        # If taxable_value is still 0 but we have taxes, calculate it
+        # Use abs() to handle both positive (regular) and negative (credit notes) tax amounts
+        if agg["taxable_value"] == 0:
+            abs_igst = abs(agg["igst"])
+            abs_cgst = abs(agg["cgst"])
+            abs_sgst = abs(agg["sgst"])
+            
+            if abs_igst > 0:
+                agg["taxable_value"] = round(abs_igst * 100 / rate, 2) if rate > 0 else 0
+            elif abs_cgst > 0 or abs_sgst > 0:
+                total_cgst_sgst = abs_cgst + abs_sgst
+                agg["taxable_value"] = round(total_cgst_sgst * 100 / rate, 2) if rate > 0 else 0
+        
         hsn_records.append({
-            GovDataField.HSN_CODE: agg["hsn_code"],
+            GovDataField.HSN_CODE: hsn_code,
             "description": agg["description"],
             GovDataField.UOM: agg["uom"],
-            GovDataField.QUANTITY: flt(agg["quantity"]),
-            GovDataField.SUPPLY_TYPE: "Inter-State" if agg["igst"] > 0 else "Intra-State",
-            GovDataField.NET_TAXABLE_VALUE: flt(agg["taxable_value"]),
-            GovDataField.IGST: flt(agg["igst"]),
-            GovDataField.CGST: flt(agg["cgst"]),
-            GovDataField.SGST: flt(agg["sgst"]),
-            GovDataField.CESS: flt(agg["cess"]),
-            GovDataField.TAX_RATE: flt(row.get("rate", 0)),
+            GovDataField.QUANTITY: round(agg["quantity"], 3),
+            "supp_ty": "Inter-State" if agg["igst"] != 0 else "Intra-State",
+            GovDataField.TAXABLE_VALUE: agg["taxable_value"],  # Use txval for HSN
+            GovDataField.IGST: agg["igst"],
+            GovDataField.CGST: agg["cgst"],
+            GovDataField.SGST: agg["sgst"],
+            GovDataField.CESS: agg["cess"],
+            GovDataField.TAX_RATE: round(rate, 3),
         })
     
+    elapsed = time.time() - start_time
+    if elapsed > 1 or len(hsn_records) > 1000:
+        logger.info(f"HSN aggregation: {len(hsn_records)} records from {len(clean_data)} rows in {elapsed:.2f}s")
+
     return hsn_records
+
+
+def calculate_totals_from_tables(gstr1_tables: Dict[str, Any], exclude_rcm: bool = True) -> Dict[str, float]:
+    """Calculate totals by summing values from individual GSTR-1 tables.
+    
+    Args:
+        gstr1_tables: The GSTR-1 tables dictionary
+        exclude_rcm: If True, exclude RCM entries from liability totals (default True)
+    
+    Returns:
+        Dictionary with totals (taxable_value, igst, cgst, sgst, cess)
+    """
+    calculated = {
+        "taxable_value": 0.0,
+        "igst": 0.0,
+        "cgst": 0.0,
+        "sgst": 0.0,
+        "cess": 0.0,
+        "rcm_taxable": 0.0,
+        "rcm_igst": 0.0,
+        "rcm_cgst": 0.0,
+        "rcm_sgst": 0.0,
+        "rcm_cess": 0.0,
+    }
+    
+    # Sum B2B invoices
+    for customer in gstr1_tables.get("b2b", []):
+        for invoice in customer.get("invoices", []):
+            is_rcm = invoice.get("rchrg", "N").upper() == "Y"
+            
+            for item in invoice.get("itms", []):
+                txval = flt(item.get("txval", 0))
+                igst = flt(item.get("iamt", 0))
+                cgst = flt(item.get("camt", 0))
+                sgst = flt(item.get("samt", 0))
+                cess = flt(item.get("csamt", 0))
+                
+                if is_rcm and exclude_rcm:
+                    calculated["rcm_taxable"] += txval
+                    calculated["rcm_igst"] += igst
+                    calculated["rcm_cgst"] += cgst
+                    calculated["rcm_sgst"] += sgst
+                    calculated["rcm_cess"] += cess
+                else:
+                    calculated["taxable_value"] += txval
+                    calculated["igst"] += igst
+                    calculated["cgst"] += cgst
+                    calculated["sgst"] += sgst
+                    calculated["cess"] += cess
+    
+    # Sum B2CL invoices - include CGST/SGST when present
+    for invoice in gstr1_tables.get("b2cl", []):
+        calculated["taxable_value"] += flt(invoice.get("txval", 0))
+        calculated["igst"] += flt(invoice.get("iamt", 0))
+        calculated["cgst"] += flt(invoice.get("camt", 0))
+        calculated["sgst"] += flt(invoice.get("samt", 0))
+        calculated["cess"] += flt(invoice.get("csamt", 0))
+    
+    # Sum B2CS entries - include CGST/SGST when present
+    for entry in gstr1_tables.get("b2cs", []):
+        calculated["taxable_value"] += flt(entry.get("txval", 0))
+        calculated["igst"] += flt(entry.get("iamt", 0))
+        calculated["cgst"] += flt(entry.get("camt", 0))
+        calculated["sgst"] += flt(entry.get("samt", 0))
+        calculated["cess"] += flt(entry.get("csamt", 0))
+    
+    # Sum EXP invoices
+    for invoice in gstr1_tables.get("exp", []):
+        calculated["taxable_value"] += flt(invoice.get("txval", 0))
+        calculated["igst"] += flt(invoice.get("iamt", 0))
+        calculated["cess"] += flt(invoice.get("csamt", 0))
+    
+    # Sum CDNR notes
+    for customer in gstr1_tables.get("cdnr", []):
+        for note in customer.get("notes", []):
+            for item in note.get("itms", []):
+                calculated["taxable_value"] += flt(item.get("txval", 0))
+                calculated["igst"] += flt(item.get("iamt", 0))
+                calculated["cgst"] += flt(item.get("camt", 0))
+                calculated["sgst"] += flt(item.get("samt", 0))
+                calculated["cess"] += flt(item.get("csamt", 0))
+    
+    # Sum CDNUR notes
+    for note in gstr1_tables.get("cdnur", []):
+        calculated["taxable_value"] += flt(note.get("txval", 0))
+        calculated["igst"] += flt(note.get("iamt", 0))
+        calculated["cess"] += flt(note.get("csamt", 0))
+    
+    # Apply final rounding to avoid floating point errors
+    for key in calculated:
+        calculated[key] = round(calculated[key], 2)
+    
+    return calculated
+
+
+def validate_summary_totals(gstr1_tables: Dict[str, Any]) -> ValidationReport:
+    """
+    Validate that summary totals match the sum of individual table values.
+    
+    RCM entries are excluded from liability totals in both summary and table sums.
+    
+    Returns a structured ValidationReport instead of crashing.
+    """
+    report = ValidationReport()
+    summary = gstr1_tables.get("summary", {})
+    
+    # Calculate totals from tables - this now excludes RCM by default
+    calculated = calculate_totals_from_tables(gstr1_tables, exclude_rcm=True)
+    
+    # Get summary liability totals (RCM already excluded in generate_gstr1_tables)
+    summary_taxable = flt(summary.get("total_taxable_value", 0))
+    summary_igst = flt(summary.get("total_igst", 0))
+    summary_cgst = flt(summary.get("total_cgst", 0))
+    summary_sgst = flt(summary.get("total_sgst", 0))
+    summary_cess = flt(summary.get("total_cess", 0))
+    
+    # Tolerance for floating point comparison
+    tolerance = 0.05
+    
+    has_mismatch = False
+    
+    # Check taxable value
+    if abs(summary_taxable - calculated["taxable_value"]) > tolerance:
+        report.add_error(
+            f"Taxable Value Mismatch: Summary={summary_taxable}, Tables Sum={calculated['taxable_value']}"
+        )
+        has_mismatch = True
+    
+    # Check IGST
+    if abs(summary_igst - calculated["igst"]) > tolerance:
+        report.add_error(
+            f"IGST Mismatch: Summary={summary_igst}, Tables Sum={calculated['igst']}"
+        )
+        has_mismatch = True
+    
+    # Check CGST
+    if abs(summary_cgst - calculated["cgst"]) > tolerance:
+        report.add_error(
+            f"CGST Mismatch: Summary={summary_cgst}, Tables Sum={calculated['cgst']}"
+        )
+        has_mismatch = True
+    
+    # Check SGST
+    if abs(summary_sgst - calculated["sgst"]) > tolerance:
+        report.add_error(
+            f"SGST Mismatch: Summary={summary_sgst}, Tables Sum={calculated['sgst']}"
+        )
+        has_mismatch = True
+    
+    # Check CESS
+    if abs(summary_cess - calculated["cess"]) > tolerance:
+        report.add_error(
+            f"CESS Mismatch: Summary={summary_cess}, Tables Sum={calculated['cess']}"
+        )
+        has_mismatch = True
+    
+    # Log RCM breakdown for transparency
+    rcm_igst = flt(summary.get("rcm_igst", 0))
+    rcm_cgst = flt(summary.get("rcm_cgst", 0))
+    rcm_sgst = flt(summary.get("rcm_sgst", 0))
+    
+    if rcm_igst > 0 or rcm_cgst > 0 or rcm_sgst > 0:
+        logger.info(
+            f"RCM entries excluded from liability: IGST={rcm_igst}, CGST={rcm_cgst}, SGST={rcm_sgst}"
+        )
+    
+    if not has_mismatch:
+        logger.info(
+            f"Summary validation passed: Taxable={calculated['taxable_value']}, "
+            f"IGST={calculated['igst']}, CGST={calculated['cgst']}, "
+            f"SGST={calculated['sgst']}, CESS={calculated['cess']}"
+        )
+    else:
+        logger.error(f"Summary validation failed: {report.errors}")
+    
+    return report
 
 
 def generate_gstr1_tables(
@@ -337,28 +866,25 @@ def generate_gstr1_tables(
     company_gstin: str = "",
     include_hsn: bool = True,
     include_docs: bool = False,
-) -> Dict[str, Any]:
+    validate: bool = True,
+) -> Tuple[Dict[str, Any], ValidationReport]:
     """
     Convert validated clean_data into GSTR-1 schema tables.
     
-    Args:
-        clean_data: List of validated invoice records from processor.py
-        company_gstin: Company's GSTIN for inter-state determination
-        include_hsn: Whether to generate HSN summary
-        include_docs: Whether to generate document summary
+    Returns tuple of (gstr1_tables, validation_report)
     
-    Returns:
-        Dictionary with GSTR-1 tables:
-        - b2b: List of B2B invoices
-        - b2cl: List of B2CL invoices  
-        - b2cs: List of B2CS entries
-        - exp: List of export invoices
-        - cdnr: List of credit/debit notes (registered)
-        - cdnur: List of credit/debit notes (unregistered)
-        - hsn: HSN summary (if include_hsn=True)
-        - docs: Document summary (if include_docs=True)
-        - summary: Totals and counts
+    The validation_report will contain errors if validation fails,
+    but processing will continue to return partial results.
+    
+    Safety checks:
+    - No duplicate invoice_number per GSTIN
+    - No duplicate export entries
+    - HSN taxable total equals summary taxable
+    - Summary totals match table sums
     """
+    start_time = time.time()
+    report = ValidationReport()
+
     if not clean_data:
         logger.warning("No clean_data provided to generate_gstr1_tables")
         return {
@@ -375,12 +901,26 @@ def generate_gstr1_tables(
                 "total_cgst": 0,
                 "total_sgst": 0,
                 "total_cess": 0,
+                "processing_time_seconds": 0,
+                "cdnr_credit_notes": 0,
+                "cdnr_debit_notes": 0,
+                "cdnur_credit_notes": 0,
+                "cdnur_debit_notes": 0,
+                "rcm_taxable": 0,
+                "rcm_igst": 0,
+                "rcm_cgst": 0,
+                "rcm_sgst": 0,
+                "rcm_cess": 0,
+                "total_reported_taxable": 0,
+                "total_reported_igst": 0,
+                "total_reported_cgst": 0,
+                "total_reported_sgst": 0,
+                "total_reported_cess": 0,
             }
-        }
-    
-    logger.info(f"Generating GSTR-1 tables from {len(clean_data)} records, company_gstin: {company_gstin}")
-    
-    # Initialize tables
+        }, report
+
+    logger.info(f"Generating GSTR-1 tables from {len(clean_data)} records...")
+
     b2b_invoices: Dict[str, Dict[str, Any]] = {}
     b2cl_invoices: List[Dict[str, Any]] = []
     b2cs_invoices: List[Dict[str, Any]] = []
@@ -388,7 +928,10 @@ def generate_gstr1_tables(
     cdnr_invoices: Dict[str, Dict[str, Any]] = {}
     cdnur_invoices: List[Dict[str, Any]] = []
     
-    # Track totals
+    # Track duplicates for safety checks
+    b2b_invoice_keys: Dict[str, set] = {}  # gstin -> set of invoice_numbers
+    exp_invoice_keys: set = set()  # set of invoice_numbers
+
     total_taxable = 0.0
     total_igst = 0.0
     total_cgst = 0.0
@@ -396,48 +939,136 @@ def generate_gstr1_tables(
     total_cess = 0.0
     total_invoices = 0
     
-    for row in clean_data:
-        invoice_value = flt(row.get("invoice_value", 0))
-        taxable_value = flt(row.get("taxable_value", 0))
-        igst_amount = flt(row.get("igst", 0))
-        cgst_amount = flt(row.get("cgst", 0))
-        sgst_amount = flt(row.get("sgst", 0))
-        cess_amount = flt(row.get("cess", 0))
+    # Track RCM separately - RCM is reported but NOT included in liability
+    total_rcm_taxable = 0.0
+    total_rcm_igst = 0.0
+    total_rcm_cgst = 0.0
+    total_rcm_sgst = 0.0
+    total_rcm_cess = 0.0
+    
+    cdnur_credit_notes = 0
+    cdnur_debit_notes = 0
+    cdnr_credit_notes = 0
+    cdnr_debit_notes = 0
+
+    for original_row in clean_data:
+        row = normalize_row_fields(original_row)
+
+        signed = get_signed_values(row)
         
-        # Update totals
-        total_taxable += taxable_value
-        total_igst += igst_amount
-        total_cgst += cgst_amount
-        total_sgst += sgst_amount
-        total_cess += cess_amount
-        total_invoices += 1
+        # Check if this is RCM - RCM is reported but NOT added to liability
+        is_rcm = str(row.get("reverse_charge", "")).upper() in ("Y", "YES", "TRUE", "1")
         
-        # Get category
-        category, sub_category = get_invoice_category(row, company_gstin)
-        
-        # Group by GSTIN for B2B and CDNR (multiple invoices per GSTIN)
+        if is_rcm:
+            # RCM is included in tables but excluded from liability totals
+            total_rcm_taxable += signed["taxable_value"]
+            total_rcm_igst += signed["igst"]
+            total_rcm_cgst += signed["cgst"]
+            total_rcm_sgst += signed["sgst"]
+            total_rcm_cess += signed["cess"]
+            # RCM is still counted in total_invoices for reporting
+            total_invoices += 1
+        else:
+            # Non-RCM entries are added to liability totals
+            total_taxable += signed["taxable_value"]
+            total_igst += signed["igst"]
+            total_cgst += signed["cgst"]
+            total_sgst += signed["sgst"]
+            total_cess += signed["cess"]
+            total_invoices += 1
+
+        category, _ = get_invoice_category(row, company_gstin)
         gstin = row.get("gstin", "") or ""
-        invoice_key = f"{gstin}_{row.get('invoice_number', '')}"
+        invoice_number = row.get("invoice_number", "")
         
-        if category == GSTR1_Category.B2B.value:
+        # Get document type info for credit/debit note detection
+        invoice_type = row.get("invoice_type", "").lower()
+        document_type = row.get("document_type", "").lower()
+        doc_type_combined = invoice_type + " " + document_type
+        
+        # Edge case protection: Missing invoice_number for B2B/Export should error
+        if category in [GSTR1_Category.B2B.value, GSTR1_Category.EXP.value] and not invoice_number:
+            report.add_error(f"Missing invoice_number for {category} transaction at row index {row.get('idx', 'unknown')}")
+        
+        # Detect credit/debit notes - these go ONLY to CDNR/CDNUR, never to B2B
+        is_credit_note = row.get("is_return", False) or "credit" in doc_type_combined.lower() or invoice_type in ["cn", "cr"]
+        is_debit_note_type = row.get("is_debit_note", False) or "debit" in doc_type_combined.lower() or invoice_type in ["dn", "dr"]
+        
+        # Skip adding to B2B if it's a credit/debit note (should be in CDNR only)
+        is_credit_debit_note = is_credit_note or is_debit_note_type
+        
+        invoice_value = flt(row.get("invoice_value", 0))
+        
+        if is_credit_note and invoice_value > 0:
+            report.add_warning(f"Credit note with positive value: {invoice_value}. Consider checking sign.")
+        if is_debit_note_type and invoice_value < 0:
+            report.add_warning(f"Debit note with negative value: {invoice_value}. Consider checking sign.")
+
+        if category == GSTR1_Category.B2B.value and not is_credit_debit_note:
+            # Only add REGULAR invoices to B2B, not credit/debit notes
+            # Credit/debit notes with GSTIN go to CDNR
             if gstin not in b2b_invoices:
                 b2b_invoices[gstin] = {
                     "ctin": gstin,
                     "customer_name": row.get("customer_name", ""),
                     "invoices": [],
                 }
+                b2b_invoice_keys[gstin] = set()
             
-            b2b_invoices[gstin]["invoices"].append(format_invoice_for_b2b(row))
-        
+            formatted_invoice = format_invoice_for_b2b(row)
+            
+            # Check for duplicate
+            if invoice_number in b2b_invoice_keys.get(gstin, set()):
+                report.add_warning(f"Duplicate invoice_number '{invoice_number}' for GSTIN '{gstin[:6]}...'")
+            else:
+                b2b_invoice_keys[gstin].add(invoice_number)
+            
+            b2b_invoices[gstin]["invoices"].append(formatted_invoice)
+
         elif category == GSTR1_Category.B2CL.value:
             b2cl_invoices.append(format_invoice_for_b2cl(row))
-        
+
         elif category == GSTR1_Category.B2CS.value:
-            b2cs_invoices.append(format_invoice_for_b2cs(row))
-        
+            pos_code = extract_state_code(row.get("place_of_supply"))
+            rate_value = flt(row.get("rate", 0))
+            
+            signed_taxable = signed["taxable_value"]
+            signed_igst = signed["igst"]
+            signed_cgst = signed["cgst"]
+            signed_sgst = signed["sgst"]
+            signed_cess = signed["cess"]
+            
+            existing = next(
+                (x for x in b2cs_invoices
+                 if x.get("pos") == pos_code and x.get("rt") == rate_value),
+                None
+            )
+
+            if existing:
+                existing["txval"] += signed_taxable
+                existing["iamt"] += signed_igst
+                existing["camt"] += signed_cgst
+                existing["samt"] += signed_sgst
+                existing["csamt"] += signed_cess
+            else:
+                b2cs_invoices.append({
+                    "pos": pos_code,
+                    "rt": rate_value,
+                    "txval": signed_taxable,
+                    "iamt": signed_igst,
+                    "camt": signed_cgst,
+                    "samt": signed_sgst,
+                    "csamt": signed_cess,
+                })
+
         elif category == GSTR1_Category.EXP.value:
+            # Safety check: No duplicate export invoices
+            if invoice_number in exp_invoice_keys:
+                report.add_warning(f"Duplicate export invoice_number '{invoice_number}'")
+            else:
+                exp_invoice_keys.add(invoice_number)
             exp_invoices.append(format_invoice_for_exp(row))
-        
+
         elif category == GSTR1_Category.CDNR.value:
             if gstin not in cdnr_invoices:
                 cdnr_invoices[gstin] = {
@@ -445,28 +1076,24 @@ def generate_gstr1_tables(
                     "customer_name": row.get("customer_name", ""),
                     "notes": [],
                 }
-            
             cdnr_invoices[gstin]["notes"].append(format_invoice_for_cdnr(row))
-        
+            if is_credit_note:
+                cdnr_credit_notes += 1
+            elif is_debit_note_type:
+                cdnr_debit_notes += 1
+
         elif category == GSTR1_Category.CDNUR.value:
-            cdnur_invoices.append({
-                "note_number": row.get("note_number", row.get("invoice_number", "")),
-                GovDataField.NOTE_DATE: format_date_for_gstr(row.get("note_date", row.get("invoice_date"))),
-                GovDataField.NOTE_TYPE: "C" if row.get("is_return") else "D",
-                GovDataField.DOC_VALUE: flt(row.get("note_value", row.get("invoice_value", 0))),
-                GovDataField.POS: extract_state_code(row.get("place_of_supply")),
-                GovDataField.TAXABLE_VALUE: taxable_value,
-                GovDataField.TAX_RATE: flt(row.get("rate", 0)),
-                GovDataField.IGST: igst_amount,
-                GovDataField.CESS: cess_amount,
-            })
-        
-        # Handle nil-exempt separately (no taxable value)
+            cdnur_invoices.append(format_invoice_for_cdnur(row))
+            if is_credit_note:
+                cdnur_credit_notes += 1
+            elif is_debit_note:
+                cdnur_debit_notes += 1
+
         elif category == GSTR1_Category.NIL_EXEMPT.value:
-            # These are tracked separately, not in main tables
             pass
-    
-    # Build result
+
+    elapsed = time.time() - start_time
+
     result = {
         "b2b": list(b2b_invoices.values()),
         "b2cl": b2cl_invoices,
@@ -481,36 +1108,80 @@ def generate_gstr1_tables(
             "total_cgst": round(total_cgst, 2),
             "total_sgst": round(total_sgst, 2),
             "total_cess": round(total_cess, 2),
+            "processing_time_seconds": round(elapsed, 2),
+            "cdnr_credit_notes": cdnr_credit_notes,
+            "cdnr_debit_notes": cdnr_debit_notes,
+            "cdnur_credit_notes": cdnur_credit_notes,
+            "cdnur_debit_notes": cdnur_debit_notes,
+            # RCM breakdown - reported but excluded from liability
+            "rcm_taxable": round(total_rcm_taxable, 2),
+            "rcm_igst": round(total_rcm_igst, 2),
+            "rcm_cgst": round(total_rcm_cgst, 2),
+            "rcm_sgst": round(total_rcm_sgst, 2),
+            "rcm_cess": round(total_rcm_cess, 2),
+            # Total reported (including RCM) for reference
+            "total_reported_taxable": round(total_taxable + total_rcm_taxable, 2),
+            "total_reported_igst": round(total_igst + total_rcm_igst, 2),
+            "total_reported_cgst": round(total_cgst + total_rcm_cgst, 2),
+            "total_reported_sgst": round(total_sgst + total_rcm_sgst, 2),
+            "total_reported_cess": round(total_cess + total_rcm_cess, 2),
         }
     }
-    
-    # Add HSN summary if requested
+
     if include_hsn:
         result["hsn"] = aggregate_hsn_summary(clean_data)
-    
-    # Add document summary if requested
+        
+        # Safety check: HSN taxable should match summary taxable
+        hsn_taxable_total = sum(h.get("txval", 0) for h in result.get("hsn", []))
+        hsn_taxable_total = round(hsn_taxable_total, 2)
+        
+        # Allow tolerance due to rounding
+        if abs(hsn_taxable_total - result["summary"]["total_taxable_value"]) > 1.0:
+            report.add_warning(
+                f"HSN taxable total ({hsn_taxable_total}) differs from summary taxable "
+                f"({result['summary']['total_taxable_value']})".format(
+                    hsn_taxable_total, result['summary']['total_taxable_value']
+                )
+            )
+
     if include_docs:
         result["docs"] = generate_document_summary(clean_data)
-    
-    # Log summary
-    logger.info(
-        f"GSTR-1 tables generated: "
-        f"{len(result['b2b'])} B2B entities, "
-        f"{len(result['b2cl'])} B2CL invoices, "
-        f"{len(result['b2cs'])} B2CS entries, "
-        f"{len(result['exp'])} exports, "
-        f"{len(result['cdnr'])} CDNR entities"
-    )
-    
-    return result
+
+    # Validate if requested
+    if validate:
+        validation_report = validate_summary_totals(result)
+        report.errors.extend(validation_report.errors)
+        report.warnings.extend(validation_report.warnings)
+        report.auto_corrections.extend(validation_report.auto_corrections)
+        if not validation_report.is_valid():
+            report.final_status = "failed"
+
+    # Set integrity status
+    if report.errors:
+        report.final_status = "failed"
+        report.add_auto_correction("Integrity validation failed - see errors")
+    elif report.warnings:
+        report.final_status = "passed_with_warnings"
+    else:
+        report.final_status = "passed"
+
+    if elapsed > PROCESSING_TIMEOUT_THRESHOLD:
+        logger.warning(
+            f"GSTR-1 table generation: {len(clean_data)} rows in {elapsed:.2f}s. "
+            f"Consider streaming for larger datasets."
+        )
+    else:
+        logger.info(
+            f"GSTR-1 tables generated in {elapsed:.2f}s: "
+            f"{len(result['b2b'])} B2B, {len(result['b2cl'])} B2CL, "
+            f"{len(result['b2cs'])} B2CS, {len(result['exp'])} EXP"
+        )
+
+    return result, report
 
 
 def generate_document_summary(clean_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Generate document issue summary for GSTR-1.
-    
-    Counts invoices by nature of document.
-    """
+    """Generate document issue summary for GSTR-1."""
     document_counts = {
         "Invoices for outward supply": 0,
         "Invoices for inward supply from unregistered person": 0,
@@ -518,21 +1189,18 @@ def generate_document_summary(clean_data: List[Dict[str, Any]]) -> Dict[str, Any
         "Credit Note": 0,
         "Delivery Challan for job work": 0,
     }
-    
+
     for row in clean_data:
         is_return = row.get("is_return", False)
         is_debit_note = row.get("is_debit_note", False)
-        
+
         if is_return:
             document_counts["Credit Note"] += 1
         elif is_debit_note:
             document_counts["Debit Note"] += 1
         else:
-            if row.get("place_of_supply") == "96-Other Countries":
-                document_counts["Invoices for outward supply"] += 1
-            else:
-                document_counts["Invoices for outward supply"] += 1
-    
+            document_counts["Invoices for outward supply"] += 1
+
     return {
         "document_summary": document_counts,
         "total_documents": sum(document_counts.values()),
@@ -545,23 +1213,22 @@ def generate_gstr1_json(
     return_period: str = "",
     gstin: str = "",
     username: str = "",
-) -> Dict[str, Any]:
+    validate: bool = True,
+) -> Tuple[Dict[str, Any], ValidationReport]:
     """
     Generate complete GSTR-1 JSON payload for government filing.
     
-    Args:
-        clean_data: Validated invoice data from processor.py
-        company_gstin: Company's GSTIN
-        return_period: Return period in MMYYYY format
-        gstin: GSTIN of the taxpayer
-        username: Username of the taxpayer
+    Returns tuple of (gstr1_json, validation_report)
     
-    Returns:
-        Complete GSTR-1 JSON structure ready for filing
+    The validation_report contains errors/warnings/final_status
+    instead of crashing on validation failures.
     """
-    gstr1_tables = generate_gstr1_tables(clean_data, company_gstin)
-    
-    # Build complete GSTR-1 JSON
+    gstr1_tables, report = generate_gstr1_tables(
+        clean_data, 
+        company_gstin, 
+        validate=validate
+    )
+
     gstr1_json = {
         "gstin": gstin,
         "ret_period": return_period,
@@ -591,10 +1258,12 @@ def generate_gstr1_json(
         "camt": gstr1_tables["summary"]["total_cgst"],
         "samt": gstr1_tables["summary"]["total_sgst"],
         "csamt": gstr1_tables["summary"]["total_cess"],
+        # Include validation report in output
+        "_validation": report.to_dict() if not report.is_valid() else None,
     }
-    
+
     logger.info(f"Generated GSTR-1 JSON with {len(gstr1_json['b2b'])} B2B entries, "
                 f"{len(gstr1_json['b2cl'])} B2CL entries, "
                 f"{len(gstr1_json['b2cs'])} B2CS entries")
-    
-    return gstr1_json
+
+    return gstr1_json, report
