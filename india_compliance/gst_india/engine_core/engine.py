@@ -3,10 +3,10 @@
 from typing import List, Dict, Any
 import pandas as pd
 
-from engine_core.input_adapter import adapt_input_dataframe
-from engine_core.validation_engine import validate_rows
-from engine_core.tax_engine import compute_tax
-from engine_core.classification_engine import classify_rows
+from .input_adapter import adapt_input_dataframe
+from .validation_engine import validate_rows
+from .tax_engine import compute_tax
+from .classification_engine import classify_transaction, apply_classification
 from india_compliance.gst_india.gstr1_data import generate_gstr1_tables
 
 
@@ -30,7 +30,7 @@ class GSTR1Engine:
         rows = compute_tax(rows, self.company_gstin)
 
         # 4️⃣ Classification
-        rows = classify_rows(rows, self.company_gstin)
+        rows = apply_classification(rows)
 
         # 5️⃣ Generate GSTR-1 tables
         gstr1_tables = generate_gstr1_tables(

@@ -1,9 +1,20 @@
-import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/contexts/AuthContext';
-import type { Tables } from '@/integrations/supabase/types';
+/**
+ * GSTR-3B Data Hook - Backend Integration
+ * 
+ * This hook fetches and processes GSTR-3B data from the backend API.
+ * Backend performs all calculations - this is purely presentation.
+ */
 
-type Invoice = Tables<'invoices'>;
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { 
+  exportGSTR3BExcel, 
+  downloadExcelFromResponse,
+  type GSTR3BExportRequest,
+} from '@/lib/api';
+
+// ============================================
+// Type Definitions (Frontend-friendly)
+// ============================================
 
 export interface OutwardSupplies {
   // 3.1(a) Outward taxable supplies (other than zero rated, nil rated and exempted)
@@ -121,207 +132,216 @@ export interface GSTR3BData {
   };
 }
 
-function createEmptyTaxRow(): { taxableValue: number; igst: number; cgst: number; sgst: number; cess: number } {
-  return { taxableValue: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 };
-}
-
-function processOutwardSupplies(invoices: Invoice[]): OutwardSupplies {
-  // Filter only sales invoices with passed validation
-  const validInvoices = invoices.filter(
-    inv => inv.validation_status === 'passed' && (inv as any).invoice_category !== 'purchase'
-  );
-  
-  const taxableSupplies = createEmptyTaxRow();
-  const zeroRatedSupplies = createEmptyTaxRow();
-  const nilRatedSupplies = createEmptyTaxRow();
-  const reverseChargeSupplies = createEmptyTaxRow();
-  
-  validInvoices.forEach(inv => {
-    const isExport = inv.invoice_type === 'EXPORT';
-    const taxableValue = inv.taxable_value || 0;
-    const igst = inv.igst_amount || 0;
-    const cgst = inv.cgst_amount || 0;
-    const sgst = inv.sgst_amount || 0;
-    
-    if (isExport) {
-      // Zero rated exports
-      zeroRatedSupplies.taxableValue += taxableValue;
-      zeroRatedSupplies.igst += igst;
-    } else if (taxableValue > 0 && (igst > 0 || cgst > 0 || sgst > 0)) {
-      // Regular taxable supplies
-      taxableSupplies.taxableValue += taxableValue;
-      taxableSupplies.igst += igst;
-      taxableSupplies.cgst += cgst;
-      taxableSupplies.sgst += sgst;
-    }
-  });
-
-  return {
-    taxableSupplies,
-    zeroRatedSupplies,
-    nilRatedSupplies,
-    reverseChargeSupplies,
-    nonGstSupplies: { taxableValue: 0 },
-  };
-}
-
-function processInterStateSupplies(invoices: Invoice[]): InterStateSupplies {
-  // Filter only sales invoices
-  const b2clInvoices = invoices.filter(
-    inv => inv.invoice_type === 'B2CL' && 
-           inv.validation_status === 'passed' &&
-           (inv as any).invoice_category !== 'purchase'
-  );
-
-  // Group by place of supply
-  const unregGrouped = new Map<string, { taxableValue: number; igst: number }>();
-  
-  b2clInvoices.forEach(inv => {
-    const pos = inv.place_of_supply || 'Unknown';
-    const existing = unregGrouped.get(pos) || { taxableValue: 0, igst: 0 };
-    existing.taxableValue += inv.taxable_value || 0;
-    existing.igst += inv.igst_amount || 0;
-    unregGrouped.set(pos, existing);
-  });
-
-  return {
-    unreg: Array.from(unregGrouped.entries()).map(([placeOfSupply, data]) => ({
-      placeOfSupply,
-      ...data,
-    })),
-    compDealer: [],
-    uin: [],
-  };
-}
-
-function processEligibleITC(invoices: Invoice[]): EligibleITC {
-  // Filter purchase invoices with passed validation
-  const purchaseInvoices = invoices.filter(
-    inv => (inv as any).invoice_category === 'purchase' && inv.validation_status === 'passed'
-  );
-
-  // Calculate ITC from purchase invoices
-  const itcAvailable = { igst: 0, cgst: 0, sgst: 0, cess: 0 };
-  
-  purchaseInvoices.forEach(inv => {
-    itcAvailable.igst += inv.igst_amount || 0;
-    itcAvailable.cgst += inv.cgst_amount || 0;
-    itcAvailable.sgst += inv.sgst_amount || 0;
-  });
-
-  // For now, assume no ITC reversal or ineligible ITC
-  // These would typically come from specific business rules
-  const itcReversed = { igst: 0, cgst: 0, sgst: 0, cess: 0 };
-  const ineligibleItc = { igst: 0, cgst: 0, sgst: 0, cess: 0 };
-
-  // Net ITC = Available - Reversed
-  const netItc = {
-    igst: itcAvailable.igst - itcReversed.igst,
-    cgst: itcAvailable.cgst - itcReversed.cgst,
-    sgst: itcAvailable.sgst - itcReversed.sgst,
-    cess: itcAvailable.cess - itcReversed.cess,
-  };
-
-  return {
-    itcAvailable,
-    itcReversed,
-    netItc,
-    ineligibleItc,
-  };
-}
-
-function calculateTaxPayable(outward: OutwardSupplies, itc: EligibleITC): GSTR3BData['taxPayable'] {
-  const onOutward = {
-    description: 'Tax on outward supplies',
-    igst: outward.taxableSupplies.igst + outward.zeroRatedSupplies.igst,
-    cgst: outward.taxableSupplies.cgst,
-    sgst: outward.taxableSupplies.sgst,
-    cess: outward.taxableSupplies.cess,
-  };
-
-  const onReverseCharge = {
-    description: 'Tax on reverse charge',
-    igst: outward.reverseChargeSupplies.igst,
-    cgst: outward.reverseChargeSupplies.cgst,
-    sgst: outward.reverseChargeSupplies.sgst,
-    cess: outward.reverseChargeSupplies.cess,
-  };
-
-  // Net tax payable = Output tax - ITC
-  const total = {
-    description: 'Net tax payable',
-    igst: Math.max(0, onOutward.igst + onReverseCharge.igst - itc.netItc.igst),
-    cgst: Math.max(0, onOutward.cgst + onReverseCharge.cgst - itc.netItc.cgst),
-    sgst: Math.max(0, onOutward.sgst + onReverseCharge.sgst - itc.netItc.sgst),
-    cess: Math.max(0, onOutward.cess + onReverseCharge.cess - itc.netItc.cess),
-  };
-
-  return { onOutwardSupplies: onOutward, onReverseCharge, total };
-}
-
 export interface GSTR3BFilterOptions {
   uploadSessionId?: string;
   startDate?: Date;
   endDate?: Date;
 }
 
-export function useGSTR3BData(options?: GSTR3BFilterOptions) {
-  const { user } = useAuth();
-  const { uploadSessionId, startDate, endDate } = options || {};
+// ============================================
+// Helper Functions
+// ============================================
 
-  return useQuery({
-    queryKey: ['gstr3b-data', user?.id, uploadSessionId, startDate?.toISOString(), endDate?.toISOString()],
-    queryFn: async (): Promise<GSTR3BData> => {
-      if (!user) throw new Error('User not authenticated');
+function createEmptyTaxRow(): { taxableValue: number; igst: number; cgst: number; sgst: number; cess: number } {
+  return { taxableValue: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 };
+}
 
-      let query = supabase
-        .from('invoices')
-        .select('*')
-        .eq('user_id', user.id);
+// ============================================
+// React Query Hooks
+// ============================================
 
-      if (uploadSessionId) {
-        query = query.eq('upload_session_id', uploadSessionId);
-      }
-
-      if (startDate) {
-        query = query.gte('invoice_date', startDate.toISOString().split('T')[0]);
-      }
-
-      if (endDate) {
-        query = query.lte('invoice_date', endDate.toISOString().split('T')[0]);
-      }
-
-      const { data: invoices, error } = await query;
-
-      if (error) throw error;
-
-      const allInvoices = invoices || [];
-      const validatedInvoices = allInvoices.filter(inv => inv.validation_status === 'passed');
-
-      const outwardSupplies = processOutwardSupplies(allInvoices);
-      const interStateSupplies = processInterStateSupplies(allInvoices);
-      const eligibleItc = processEligibleITC(allInvoices);
-      const taxPayable = calculateTaxPayable(outwardSupplies, eligibleItc);
-
-      const totalTaxableValue = validatedInvoices.reduce((sum, inv) => sum + (inv.taxable_value || 0), 0);
-      const totalTax = validatedInvoices.reduce(
-        (sum, inv) => sum + (inv.igst_amount || 0) + (inv.cgst_amount || 0) + (inv.sgst_amount || 0),
-        0
-      );
-
-      return {
-        outwardSupplies,
-        interStateSupplies,
-        eligibleItc,
-        taxPayable,
-        summary: {
-          totalInvoices: allInvoices.length,
-          validatedInvoices: validatedInvoices.length,
-          totalTaxableValue,
-          totalTax,
-        },
+/**
+ * Export GSTR-3B data as Excel using backend
+ */
+export function useExportGSTR3BExcel() {
+  return useMutation({
+    mutationFn: async (params: {
+      cleanData: Record<string, unknown>[];
+      returnPeriod: string;
+      taxpayerGstin: string;
+      taxpayerName: string;
+    }) => {
+      const request: GSTR3BExportRequest = {
+        clean_data: params.cleanData,
+        return_period: params.returnPeriod,
+        taxpayer_gstin: params.taxpayerGstin,
+        taxpayer_name: params.taxpayerName,
       };
+      
+      const blob = await exportGSTR3BExcel(request);
+      return blob;
     },
-    enabled: !!user,
+    onSuccess: (blob) => {
+      downloadExcelFromResponse(blob, 'gstr3b.xlsx');
+    },
   });
+}
+
+/**
+ * Fetch GSTR-3B data from backend
+ * Note: This requires the data to be stored in backend session/cache
+ */
+export function useGSTR3BData() {
+  return useQuery({
+    queryKey: ['gstr3b-processed'],
+    queryFn: async (): Promise<GSTR3BData | null> => {
+      // This would typically fetch from a cached session
+      // For now, return null - data comes from upload response
+      return null;
+    },
+    enabled: false, // Manual trigger only
+  });
+}
+
+/**
+ * Calculate GSTR-3B summary from processed GSTR-1 data
+ * This transforms the GSTR-1 data into GSTR-3B format
+ */
+export function calculateGSTR3BFromGSTR1(gstr1Data: {
+  b2b: Array<{ invoices: Array<{
+    taxableValue: number;
+    igst: number;
+    cgst: number;
+    sgst: number;
+    invoiceType: string;
+  }> }>;
+  b2cl: Array<{
+    taxableValue: number;
+    igst: number;
+  }>;
+  b2cs: Array<{
+    taxableValue: number;
+    igst: number;
+    cgst: number;
+    sgst: number;
+  }>;
+  export: Array<{
+    taxableValue: number;
+    igst: number;
+  }>;
+}): GSTR3BData {
+  const outwardSupplies: OutwardSupplies = {
+    taxableSupplies: createEmptyTaxRow(),
+    zeroRatedSupplies: createEmptyTaxRow(),
+    nilRatedSupplies: createEmptyTaxRow(),
+    reverseChargeSupplies: createEmptyTaxRow(),
+    nonGstSupplies: { taxableValue: 0 },
+  };
+
+  const interStateSupplies: InterStateSupplies = {
+    unreg: [],
+    compDealer: [],
+    uin: [],
+  };
+
+  // Process B2B invoices
+  gstr1Data.b2b.forEach((customer) => {
+    customer.invoices.forEach((invoice) => {
+      const taxableValue = invoice.taxableValue;
+      const igst = invoice.igst;
+      const cgst = invoice.cgst;
+      const sgst = invoice.sgst;
+      
+      if (invoice.invoiceType === 'EXPORT') {
+        // Zero rated exports
+        outwardSupplies.zeroRatedSupplies.taxableValue += taxableValue;
+        outwardSupplies.zeroRatedSupplies.igst += igst;
+      } else {
+        // Regular taxable supplies
+        outwardSupplies.taxableSupplies.taxableValue += taxableValue;
+        outwardSupplies.taxableSupplies.igst += igst;
+        outwardSupplies.taxableSupplies.cgst += cgst;
+        outwardSupplies.taxableSupplies.sgst += sgst;
+      }
+    });
+  });
+
+  // Process B2CL invoices (inter-state to unregistered)
+  gstr1Data.b2cl.forEach((invoice) => {
+    outwardSupplies.taxableSupplies.taxableValue += invoice.taxableValue;
+    outwardSupplies.taxableSupplies.igst += invoice.igst;
+  });
+
+  // Process B2CS entries
+  gstr1Data.b2cs.forEach((entry) => {
+    outwardSupplies.taxableSupplies.taxableValue += entry.taxableValue;
+    outwardSupplies.taxableSupplies.igst += entry.igst;
+    outwardSupplies.taxableSupplies.cgst += entry.cgst;
+    outwardSupplies.taxableSupplies.sgst += entry.sgst;
+  });
+
+  // Process Export invoices
+  gstr1Data.export.forEach((invoice) => {
+    outwardSupplies.zeroRatedSupplies.taxableValue += invoice.taxableValue;
+    outwardSupplies.zeroRatedSupplies.igst += invoice.igst;
+  });
+
+  // Calculate tax payable
+  const onOutward: TaxPayable = {
+    description: 'Tax on outward supplies',
+    igst: outwardSupplies.taxableSupplies.igst + outwardSupplies.zeroRatedSupplies.igst,
+    cgst: outwardSupplies.taxableSupplies.cgst,
+    sgst: outwardSupplies.taxableSupplies.sgst,
+    cess: outwardSupplies.taxableSupplies.cess,
+  };
+
+  const onReverseCharge: TaxPayable = {
+    description: 'Tax on reverse charge',
+    igst: outwardSupplies.reverseChargeSupplies.igst,
+    cgst: outwardSupplies.reverseChargeSupplies.cgst,
+    sgst: outwardSupplies.reverseChargeSupplies.sgst,
+    cess: outwardSupplies.reverseChargeSupplies.cess,
+  };
+
+  // ITC calculation (simplified - would need purchase data)
+  const eligibleItc: EligibleITC = {
+    itcAvailable: { igst: 0, cgst: 0, sgst: 0, cess: 0 },
+    itcReversed: { igst: 0, cgst: 0, sgst: 0, cess: 0 },
+    netItc: { igst: 0, cgst: 0, sgst: 0, cess: 0 },
+    ineligibleItc: { igst: 0, cgst: 0, sgst: 0, cess: 0 },
+  };
+
+  const totalTaxPayable = {
+    description: 'Net tax payable',
+    igst: Math.max(0, onOutward.igst + onReverseCharge.igst - eligibleItc.netItc.igst),
+    cgst: Math.max(0, onOutward.cgst + onReverseCharge.cgst - eligibleItc.netItc.cgst),
+    sgst: Math.max(0, onOutward.sgst + onReverseCharge.sgst - eligibleItc.netItc.sgst),
+    cess: Math.max(0, onOutward.cess + onReverseCharge.cess - eligibleItc.netItc.cess),
+  };
+
+  // Calculate totals
+  const totalInvoices = 
+    gstr1Data.b2b.reduce((sum, c) => sum + c.invoices.length, 0) +
+    gstr1Data.b2cl.length +
+    gstr1Data.b2cs.length +
+    gstr1Data.export.length;
+
+  const totalTaxableValue = 
+    gstr1Data.b2b.reduce((sum, c) => sum + c.invoices.reduce((s, i) => s + i.taxableValue, 0), 0) +
+    gstr1Data.b2cl.reduce((sum, i) => sum + i.taxableValue, 0) +
+    gstr1Data.b2cs.reduce((sum, i) => sum + i.taxableValue, 0) +
+    gstr1Data.export.reduce((sum, i) => sum + i.taxableValue, 0);
+
+  const totalTax = 
+    gstr1Data.b2b.reduce((sum, c) => sum + c.invoices.reduce((s, i) => s + i.igst + i.cgst + i.sgst, 0), 0) +
+    gstr1Data.b2cl.reduce((sum, i) => sum + i.igst, 0) +
+    gstr1Data.b2cs.reduce((sum, i) => sum + i.igst + i.cgst + i.sgst, 0) +
+    gstr1Data.export.reduce((sum, i) => sum + i.igst, 0);
+
+  return {
+    outwardSupplies,
+    interStateSupplies,
+    eligibleItc,
+    taxPayable: {
+      onOutwardSupplies: onOutward,
+      onReverseCharge,
+      total: totalTaxPayable,
+    },
+    summary: {
+      totalInvoices,
+      validatedInvoices: totalInvoices,
+      totalTaxableValue,
+      totalTax,
+    },
+  };
 }

@@ -1,4 +1,11 @@
-import { useState, useCallback } from 'react';
+/**
+ * Upload Page - Backend Integration
+ * 
+ * This page handles Excel file uploads and sends them to the backend API
+ * for GSTR-1 processing instead of processing locally and storing in Supabase.
+ */
+
+import { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload, FileSpreadsheet, X, CheckCircle, AlertCircle, ShoppingCart, Receipt } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -9,8 +16,8 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
 import { 
   parseExcelFile, 
   autoMapColumns, 
@@ -22,8 +29,7 @@ import {
   type ColumnMapping,
   type ParsedExcel 
 } from '@/lib/excel-parser';
-import { validateInvoice, determineInvoiceType, validatePurchaseInvoice } from '@/lib/validation';
-import { Loader2 } from 'lucide-react';
+import { getExcelColumns, processGSTR1Excel, type GSTR1ProcessResponse } from '@/lib/api';
 
 type InvoiceCategory = 'sales' | 'purchase';
 
@@ -33,10 +39,27 @@ export default function UploadPage() {
   const [parsedData, setParsedData] = useState<ParsedExcel | null>(null);
   const [columnMapping, setColumnMapping] = useState<Partial<ColumnMapping>>({});
   const [isProcessing, setIsProcessing] = useState(false);
-  const [step, setStep] = useState<'upload' | 'mapping' | 'processing'>('upload');
-  const { user, profile } = useAuth();
+  const [step, setStep] = useState<'upload' | 'mapping' | 'processing' | 'result'>('upload');
+  const [uploadResult, setUploadResult] = useState<GSTR1ProcessResponse | null>(null);
+  const { user } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  // Load previous upload result from localStorage on mount
+  useEffect(() => {
+    const stored = localStorage.getItem('gstr1_upload_result');
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (parsed.success && parsed.data) {
+          setUploadResult(parsed);
+          setStep('result');
+        }
+      } catch (e) {
+        console.error('Failed to parse stored upload result:', e);
+      }
+    }
+  }, []);
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const uploadedFile = acceptedFiles[0];
@@ -91,108 +114,53 @@ export default function UploadPage() {
   const isMappingComplete = requiredFields.every(field => columnMapping[field]);
 
   const handleProcessInvoices = async () => {
-    if (!parsedData || !user || !isMappingComplete) return;
+    if (!file || !isMappingComplete) return;
 
     setStep('processing');
     setIsProcessing(true);
 
     try {
-      // Create upload session
-      const { data: session, error: sessionError } = await supabase
-        .from('upload_sessions')
-        .insert({
-          user_id: user.id,
-          file_name: file?.name || 'Unknown',
-          row_count: parsedData.rows.length,
-          status: 'processing',
-          column_mappings: columnMapping,
-        })
-        .select()
-        .single();
-
-      if (sessionError) throw sessionError;
-
-      // Get seller state code from profile GSTIN
-      const sellerStateCode = profile?.gstin?.substring(0, 2) || '27'; // Default to MH
-
-      // Process and validate each invoice
-      const invoices = parsedData.rows.map(row => {
-        const mapped = mapRowToInvoice(row, columnMapping as ColumnMapping);
-        
-        // Use different validation for purchase vs sales
-        const validation = invoiceCategory === 'purchase' 
-          ? validatePurchaseInvoice({
-              ...mapped,
-              supplier_gstin: mapped.customer_gstin, // Map customer_gstin to supplier_gstin for purchases
-            })
-          : validateInvoice(mapped);
-        
-        // Only determine invoice type for sales invoices
-        const invoiceType = invoiceCategory === 'sales' 
-          ? determineInvoiceType(
-              mapped.customer_gstin,
-              mapped.place_of_supply,
-              sellerStateCode,
-              mapped.total_amount
-            )
-          : 'PURCHASE';
-
-        return {
-          upload_session_id: session.id,
-          user_id: user.id,
-          invoice_number: mapped.invoice_number,
-          invoice_date: mapped.invoice_date,
-          customer_name: invoiceCategory === 'sales' ? mapped.customer_name : null,
-          customer_gstin: invoiceCategory === 'sales' ? mapped.customer_gstin : null,
-          supplier_name: invoiceCategory === 'purchase' ? mapped.customer_name : null,
-          supplier_gstin: invoiceCategory === 'purchase' ? mapped.customer_gstin : null,
-          place_of_supply: mapped.place_of_supply,
-          hsn_code: mapped.hsn_code,
-          taxable_value: mapped.taxable_value,
-          cgst_rate: mapped.cgst_rate,
-          cgst_amount: mapped.cgst_amount,
-          sgst_rate: mapped.sgst_rate,
-          sgst_amount: mapped.sgst_amount,
-          igst_rate: mapped.igst_rate,
-          igst_amount: mapped.igst_amount,
-          total_amount: mapped.total_amount,
-          invoice_type: invoiceType,
-          invoice_category: invoiceCategory,
-          validation_status: validation.status,
-          validation_errors: JSON.parse(JSON.stringify(validation.errors)),
-          raw_data: JSON.parse(JSON.stringify(mapped.raw_data)),
-        };
+      // Convert column mapping to Record<string, string> for backend
+      const mappingDict: Record<string, string> = {};
+      Object.entries(columnMapping).forEach(([key, value]) => {
+        if (value) {
+          mappingDict[key] = value;
+        }
       });
 
-      // Insert invoices in batches
-      const batchSize = 100;
-      for (let i = 0; i < invoices.length; i += batchSize) {
-        const batch = invoices.slice(i, i + batchSize);
-        const { error: invoiceError } = await supabase
-          .from('invoices')
-          .insert(batch);
-
-        if (invoiceError) throw invoiceError;
+      // Use the new process endpoint that accepts column mapping
+      const result = await processGSTR1Excel(
+        file,
+        mappingDict
+      );
+      
+      setUploadResult(result);
+      
+      // Persist GSTR-1 tables to localStorage for navigation
+      if (result.success && result.data) {
+        localStorage.setItem('gstr1_tables', JSON.stringify(result.data));
+        localStorage.setItem('gstr1_upload_result', JSON.stringify(result));
       }
-
-      // Update session status
-      await supabase
-        .from('upload_sessions')
-        .update({ status: 'completed' })
-        .eq('id', session.id);
-
-      const categoryLabel = invoiceCategory === 'sales' ? 'sales' : 'purchase';
-      toast({
-        title: 'Upload complete!',
-        description: `Successfully processed ${invoices.length} ${categoryLabel} invoices.`,
-      });
-
-      // Navigate to invoice preview
-      navigate('/invoices');
+      
+      setStep('result');
+      
+      const errorCount = result.validation_report?.errors?.length || 0;
+      if (errorCount > 0) {
+        toast({
+          title: 'Upload completed with errors',
+          description: `Processed ${result.total_records || 0} records with ${errorCount} validation errors.`,
+          variant: 'default',
+        });
+      } else {
+        toast({
+          title: 'Upload complete!',
+          description: `Successfully processed ${result.total_records || 0} records.`,
+        });
+      }
     } catch (error) {
       toast({
-        title: 'Processing failed',
-        description: error instanceof Error ? error.message : 'Failed to process invoices',
+        title: 'Upload failed',
+        description: error instanceof Error ? error.message : 'Failed to process file',
         variant: 'destructive',
       });
       setStep('mapping');
@@ -206,6 +174,15 @@ export default function UploadPage() {
     setParsedData(null);
     setColumnMapping({});
     setStep('upload');
+    setUploadResult(null);
+  };
+
+  const handleViewGSTR1 = () => {
+    navigate('/gstr1', { state: { uploadResult } });
+  };
+
+  const handleViewGSTR3B = () => {
+    navigate('/gstr3b', { state: { uploadResult } });
   };
 
   return (
@@ -338,7 +315,7 @@ export default function UploadPage() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="none">-- Not mapped --</SelectItem>
-                          {parsedData.headers.map((header) => (
+                          {parsedData.headers.filter(h => h && h.trim()).map((header) => (
                             <SelectItem key={header} value={header}>
                               {header}
                             </SelectItem>
@@ -383,6 +360,79 @@ export default function UploadPage() {
                     This may take a moment depending on the number of records.
                   </p>
                 </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Result Step */}
+        {step === 'result' && uploadResult && (
+          <Card className="shadow-card">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CheckCircle className="h-5 w-5 text-success" />
+                Upload Complete
+              </CardTitle>
+              <CardDescription>
+                Your invoice data has been processed successfully.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Summary */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="text-center p-4 bg-muted rounded-lg">
+                  <p className="text-2xl font-bold">{uploadResult.total_records || 0}</p>
+                  <p className="text-sm text-muted-foreground">Total Records</p>
+                </div>
+                <div className="text-center p-4 bg-muted rounded-lg">
+                  <p className="text-2xl font-bold">₹{(uploadResult.data?.summary?.total_taxable_value || 0).toLocaleString()}</p>
+                  <p className="text-sm text-muted-foreground">Total Taxable Value</p>
+                </div>
+                <div className="text-center p-4 bg-muted rounded-lg">
+                  <p className="text-2xl font-bold">{uploadResult.data?.summary?.b2b_count || 0}</p>
+                  <p className="text-sm text-muted-foreground">B2B Invoices</p>
+                </div>
+                <div className="text-center p-4 bg-muted rounded-lg">
+                  <p className="text-2xl font-bold">{uploadResult.data?.summary?.b2cl_count || 0}</p>
+                  <p className="text-sm text-muted-foreground">B2CL Invoices</p>
+                </div>
+              </div>
+
+              {/* Validation Errors */}
+              {uploadResult.validation_report?.errors && uploadResult.validation_report.errors.length > 0 && (
+                <div className="p-4 border border-warning rounded-lg bg-warning/10">
+                  <div className="flex items-center gap-2 mb-2">
+                    <AlertCircle className="h-5 w-5 text-warning" />
+                    <p className="font-medium">Validation Errors ({uploadResult.validation_report.errors.length})</p>
+                  </div>
+                  <div className="max-h-40 overflow-y-auto">
+                    {uploadResult.validation_report.errors.slice(0, 10).map((err, idx) => (
+                      <p key={idx} className="text-sm text-muted-foreground">
+                        {err}
+                      </p>
+                    ))}
+                    {uploadResult.validation_report.errors.length > 10 && (
+                      <p className="text-sm text-muted-foreground">
+                        ...and {uploadResult.validation_report.errors.length - 10} more errors
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex gap-4">
+                <Button onClick={handleViewGSTR1}>
+                  <FileSpreadsheet className="h-4 w-4 mr-2" />
+                  View GSTR-1 Tables
+                </Button>
+                <Button variant="outline" onClick={handleViewGSTR3B}>
+                  <FileSpreadsheet className="h-4 w-4 mr-2" />
+                  View GSTR-3B Summary
+                </Button>
+                <Button variant="ghost" onClick={resetUpload}>
+                  Upload Another File
+                </Button>
               </div>
             </CardContent>
           </Card>

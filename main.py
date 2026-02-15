@@ -5,13 +5,13 @@ This module provides a FastAPI backend for uploading and processing
 Excel files for GSTR-1 generation with detailed validation error reporting.
 Includes JWT authentication, rate limiting, and audit logging.
 """
-from engine_core.engine import GSTR1Engine
+from india_compliance.gst_india.engine_core.engine import GSTR1Engine
 from india_compliance.gst_india.exporters.gstr1_excel import export_gstr1_excel
 # Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Security, Depends, Request, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, Security, Depends, Request, BackgroundTasks, Form
 from fastapi.security import APIKeyHeader, APIKeyQuery, HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
@@ -91,6 +91,15 @@ class GSTR1ExcelRequest(BaseModel):
     taxpayer_gstin: str = ""
     taxpayer_name: str = ""
     company_gstin: str = ""
+    include_hsn: bool = True
+    include_docs: bool = False
+
+
+# ============ GSTR-1 Process Request Model ============
+class GSTR1ProcessRequest(BaseModel):
+    column_mapping: Dict[str, str] = {}
+    company_gstin: str = ""
+    return_period: str = ""
     include_hsn: bool = True
     include_docs: bool = False
 
@@ -651,6 +660,440 @@ async def upload_gstr1_excel(file: UploadFile = File(...), current_user: Dict[st
     return await upload_excel(file, current_user=current_user)
 
 
+# ============ NEW API ENDPOINTS FOR FRONTEND INTEGRATION ============
+
+@app.post("/api/gstr1/get-columns")
+async def get_columns(
+    file: UploadFile = File(...),
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """
+    Extract column headers from uploaded Excel file.
+    Used for mapping page to show available columns.
+    """
+    try:
+        contents = await file.read()
+        
+        if not contents:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
+        
+        df = pd.read_excel(io.BytesIO(contents))
+        columns = df.columns.tolist()
+        
+        return {
+            "columns": columns,
+            "column_count": len(columns),
+            "sample_data": df.head(3).to_dict(orient="records") if len(df) > 0 else []
+        }
+    
+    except Exception as e:
+        logger.exception(f"Error extracting columns: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to extract columns: {str(e)}")
+
+
+@app.post("/api/gstr1/process")
+async def process_gstr1(
+    file: UploadFile = File(...),
+    mapping: str = Form(...)
+):
+    """
+    Process Excel file for GSTR-1 generation with proper mapping application.
+    
+    CORRECT FLOW:
+    1. Read Excel ONCE
+    2. Parse mapping
+    3. Apply mapping to dataframe
+    4. Normalize dataframe
+    5. Generate GSTR-1 tables
+    6. Return structured JSON
+    """
+    try:
+        from india_compliance.gst_india.utils.header_mapper import normalize_dataframe_simple
+        from india_compliance.gst_india.gstr1_data import generate_gstr1_tables
+        
+        # Step 1: Read Excel ONCE
+        contents = await file.read()
+        df = pd.read_excel(io.BytesIO(contents))
+        
+        # Debug: Show original columns
+        print("=" * 60)
+        print("DEBUG: /api/gstr1/process endpoint")
+        print("=" * 60)
+        print(f"Original columns: {df.columns.tolist()}")
+        logger.info(f"Original columns: {df.columns.tolist()}")
+        
+        # Step 2: Parse mapping
+        mapping_dict = json.loads(mapping)
+        print(f"Applied mapping: {mapping_dict}")
+        logger.info(f"Applied mapping: {mapping_dict}")
+        
+        # Step 3: Apply mapping to dataframe
+        df.rename(columns=mapping_dict, inplace=True)
+        print(f"Columns after rename: {df.columns.tolist()}")
+        logger.info(f"Columns after rename: {df.columns.tolist()}")
+        
+        # Debug: Show first few rows
+        print("\nSample data after rename:")
+        print(df.head(2).to_string())
+        
+        # Step 4: Normalize dataframe
+        df_normalized, _ = normalize_dataframe_simple(df)
+        print(f"\nNormalized columns: {df_normalized.columns.tolist()}")
+        logger.info(f"Normalized columns: {df_normalized.columns.tolist()}")
+        
+        # Debug: Show sample normalized row
+        print("\nSample normalized row:")
+        if len(df_normalized) > 0:
+            sample_row = df_normalized.iloc[0].to_dict()
+            print(f"  invoice_number: {sample_row.get('invoice_number', 'N/A')}")
+            print(f"  invoice_value: {sample_row.get('invoice_value', 'N/A')}")
+            print(f"  taxable_value: {sample_row.get('taxable_value', 'N/A')}")
+            print(f"  rate: {sample_row.get('rate', 'N/A')}")
+            print(f"  igst: {sample_row.get('igst', 'N/A')}")
+            print(f"  cgst: {sample_row.get('cgst', 'N/A')}")
+            print(f"  sgst: {sample_row.get('sgst', 'N/A')}")
+            print(f"  gstin: {sample_row.get('gstin', 'N/A')}")
+        
+        # Step 5: Convert to records
+        clean_data = df_normalized.to_dict(orient="records")
+        print(f"\nConverted {len(clean_data)} records to dict format")
+        
+        # Step 6: Generate GSTR-1 tables
+        print("\nGenerating GSTR-1 tables...")
+        gstr1_tables, validation_report = generate_gstr1_tables(
+            clean_data=clean_data,
+            company_gstin="",
+            include_hsn=True,
+            include_docs=False
+        )
+        
+        # Debug: Show summary
+        summary = gstr1_tables.get("summary", {})
+        print("\n" + "=" * 60)
+        print("GSTR-1 SUMMARY (from API endpoint):")
+        print("=" * 60)
+        print(f"  B2B: {len(gstr1_tables.get('b2b', []))}")
+        print(f"  B2CL: {len(gstr1_tables.get('b2cl', []))}")
+        print(f"  B2CS: {len(gstr1_tables.get('b2cs', []))}")
+        print(f"  EXP: {len(gstr1_tables.get('exp', []))}")
+        print(f"  Taxable Value: Rs.{summary.get('total_taxable_value', 0):,.2f}")
+        print(f"  IGST: Rs.{summary.get('total_igst', 0):,.2f}")
+        print(f"  CGST: Rs.{summary.get('total_cgst', 0):,.2f}")
+        print(f"  SGST: Rs.{summary.get('total_sgst', 0):,.2f}")
+        
+        # Build response
+        response = {
+            "success": True,
+            "data": {
+                "summary": gstr1_tables.get("summary", {}),
+                "b2b": gstr1_tables.get("b2b", []),
+                "b2cl": gstr1_tables.get("b2cl", []),
+                "b2cs": gstr1_tables.get("b2cs", []),
+                "exp": gstr1_tables.get("exp", []),
+                "cdnr": gstr1_tables.get("cdnr", []),
+                "cdnur": gstr1_tables.get("cdnur", []),
+                "hsn": gstr1_tables.get("hsn", []),
+            },
+            "validation_report": validation_report.to_dict() if hasattr(validation_report, 'to_dict') else {
+                "errors": validation_report.errors if hasattr(validation_report, 'errors') else [],
+                "warnings": validation_report.warnings if hasattr(validation_report, 'warnings') else [],
+                "final_status": validation_report.final_status if hasattr(validation_report, 'final_status') else "unknown"
+            },
+            "total_records": len(clean_data)
+        }
+        
+        logger.info(f"GSTR-1 processed: B2B={len(response['data']['b2b'])}, B2CL={len(response['data']['b2cl'])}, "
+                   f"B2CS={len(response['data']['b2cs'])}, EXP={len(response['data']['exp'])}, "
+                   f"CDNR={len(response['data']['cdnr'])}, HSN={len(response['data']['hsn'])}")
+        
+        return response
+    
+    except Exception as e:
+        logger.exception(f"Error processing GSTR-1: {str(e)}")
+        print(f"ERROR in /api/gstr1/process: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/gstr1/process-old")
+async def process_excel_old(
+    file: UploadFile = File(...),
+    column_mapping: Optional[str] = None,
+    company_gstin: Optional[str] = "",
+    return_period: Optional[str] = "",
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """
+    OLD endpoint - DEPRECATED - Use /api/gstr1/process instead
+    """
+    return {"error": "This endpoint is deprecated. Use /api/gstr1/process instead."}
+
+
+@app.post("/api/gstr1/export")
+async def export_gstr1(data: dict):
+    """
+    Export GSTR-1 data to Excel file.
+    
+    Expected payload:
+    {
+        "gstr1_tables": {...}
+    }
+    """
+    try:
+        from india_compliance.gst_india.exporters.gstr1_excel import export_gstr1_excel
+        
+        gstr1_tables = data.get("gstr1_tables", {})
+        logger.info(f"GSTR-1 export: b2b={len(gstr1_tables.get('b2b', []))}, "
+                   f"b2cl={len(gstr1_tables.get('b2cl', []))}, "
+                   f"b2cs={len(gstr1_tables.get('b2cs', []))}")
+        
+        excel_bytes = export_gstr1_excel(
+            clean_data=gstr1_tables,
+            return_period="",
+            taxpayer_gstin="",
+            taxpayer_name=""
+        )
+        
+        return StreamingResponse(
+            io.BytesIO(excel_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": "attachment; filename=gstr1.xlsx",
+                "Content-Length": str(len(excel_bytes)),
+            }
+        )
+    
+    except Exception as e:
+        logger.exception(f"Error exporting GSTR-1: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Export error: {str(e)}")
+
+
+@app.post("/api/gstr3b/export")
+async def export_gstr3b(data: dict):
+    """
+    Export GSTR-3B summary to Excel file.
+    
+    Expected payload:
+    {
+        "gstr3b_data": {...}
+    }
+    """
+    try:
+        from india_compliance.gst_india.gstr3b_data import generate_gstr3b_summary
+        
+        gstr3b_data = data.get("gstr3b_data", {})
+        logger.info(f"GSTR-3B export received data keys: {list(gstr3b_data.keys())}")
+        
+        # Create simple Excel with xlsxwriter
+        import xlsxwriter
+        
+        output = io.BytesIO()
+        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        
+        header_fmt = workbook.add_format({
+            'bold': True,
+            'bg_color': '#4472C4',
+            'font_color': 'white',
+            'align': 'center',
+            'border': 1
+        })
+        
+        bold_fmt = workbook.add_format({'bold': True})
+        currency_fmt = workbook.add_format({'num_format': '#,##0.00', 'border': 1})
+        
+        summary_sheet = workbook.add_worksheet('GSTR-3B Summary')
+        summary_sheet.set_column('A:A', 50)
+        summary_sheet.set_column('B:F', 15)
+        
+        summary_sheet.merge_range('A1:F1', 'GSTR-3B Summary', header_fmt)
+        
+        row = 2
+        
+        # Write outward summary
+        summary_sheet.merge_range(f'A{row}:F{row}', 'Outward Supplies', header_fmt)
+        row += 1
+        
+        headers = ['Description', 'Taxable Value (₹)', 'IGST (₹)', 'CGST (₹)', 'SGST (₹)', 'CESS (₹)']
+        for col, header in enumerate(headers):
+            summary_sheet.write(row, col, header, header_fmt)
+        row += 1
+        
+        outward = gstr3b_data.get("outward_summary", {})
+        
+        sections = [
+            ("3.1(a) B2B Outward taxable supplies", outward.get("b2b", {})),
+            ("3.1(b) Exports", outward.get("exports", {})),
+            ("3.1(c) Nil/Exempt/Non-GST", outward.get("nil_exempt", {})),
+            ("3.1(d) RCM Inward", outward.get("rcm_inward", {})),
+        ]
+        
+        for desc, data_dict in sections:
+            summary_sheet.write(row, 0, desc, bold_fmt)
+            summary_sheet.write(row, 1, data_dict.get('taxable_value', 0), currency_fmt)
+            summary_sheet.write(row, 2, data_dict.get('igst', 0), currency_fmt)
+            summary_sheet.write(row, 3, data_dict.get('cgst', 0), currency_fmt)
+            summary_sheet.write(row, 4, data_dict.get('sgst', 0), currency_fmt)
+            summary_sheet.write(row, 5, data_dict.get('cess', 0), currency_fmt)
+            row += 1
+        
+        # Write liability summary
+        row += 1
+        summary_sheet.merge_range(f'A{row}:F{row}', 'Tax Liability Summary', header_fmt)
+        row += 1
+        
+        liability = gstr3b_data.get("net_tax_liability", {})
+        total_liability = liability.get("total_liability", {})
+        
+        summary_sheet.write(row, 0, 'Total Tax Liability', bold_fmt)
+        summary_sheet.write(row, 1, total_liability.get('igst', 0), currency_fmt)
+        summary_sheet.write(row, 2, total_liability.get('cgst', 0), currency_fmt)
+        summary_sheet.write(row, 3, total_liability.get('sgst', 0), currency_fmt)
+        summary_sheet.write(row, 4, total_liability.get('cess', 0), currency_fmt)
+        summary_sheet.write(row, 5, total_liability.get('total', 0), currency_fmt)
+        
+        workbook.close()
+        
+        excel_bytes = output.getvalue()
+        
+        return StreamingResponse(
+            io.BytesIO(excel_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": "attachment; filename=gstr3b.xlsx",
+                "Content-Length": str(len(excel_bytes)),
+            }
+        )
+    
+    except Exception as e:
+        logger.exception(f"Error exporting GSTR-3B: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Export error: {str(e)}")
+
+
+# ============ NEW GSTR-3B PROCESS ENDPOINT ============
+
+@app.post("/api/gstr3b/process")
+async def process_gstr3b(
+    gstr1_tables: str = Form(...),
+    purchases_file: UploadFile = File(None)
+):
+    """
+    Process GSTR-3B data with ITC reconciliation.
+    
+    CORRECT FLOW:
+    1. Parse gstr1_tables from JSON string
+    2. Handle both formats: {gstr1_tables: {...}} or {...}
+    3. Generate GSTR-3B summary from tables
+    4. Process purchases for ITC reconciliation
+    5. Return structured response
+    """
+    try:
+        from india_compliance.gst_india.gstr3b_data import generate_gstr3b_summary
+        from india_compliance.gst_india.gstr3b_reconciliation import reconcile_invoices, calculate_itc_claim
+        
+        # Step 1: Parse gstr1_tables from JSON string
+        gstr1_tables_dict = json.loads(gstr1_tables)
+        
+        # Step 1b: Handle both formats - if it's a list, error; if dict, check for nested gstr1_tables
+        if isinstance(gstr1_tables_dict, list):
+            logger.error("GSTR-3B received list instead of dict. Frontend needs to wrap in {gstr1_tables: {...}}")
+            return {"success": False, "error": "Invalid format: expected dict, received list"}
+        
+        # If data is wrapped in {gstr1_tables: {...}}, extract it
+        if 'gstr1_tables' in gstr1_tables_dict:
+            gstr1_tables_dict = gstr1_tables_dict['gstr1_tables']
+        
+        # Now gstr1_tables_dict should be a dict with b2b, b2cl, etc.
+        logger.info(f"Received GSTR-1 tables: b2b={len(gstr1_tables_dict.get('b2b', []))}, "
+                   f"b2cl={len(gstr1_tables_dict.get('b2cl', []))}, "
+                   f"b2cs={len(gstr1_tables_dict.get('b2cs', []))}")
+        
+        # Step 2: Generate GSTR-3B summary from tables
+        gstr3b_summary = generate_gstr3b_summary(
+            gstr1_tables=gstr1_tables_dict,
+            return_period="",
+            taxpayer_gstin="",
+            taxpayer_name=""
+        )
+        
+        # Step 3: Initialize response
+        response = {
+            "success": True,
+            "data": {
+                "outward_summary": {
+                    "b2b": gstr3b_summary.get("3_1_a", {}),
+                    "exports": gstr3b_summary.get("3_1_b", {}),
+                    "nil_exempt": gstr3b_summary.get("3_1_c", {}),
+                    "rcm_inward": gstr3b_summary.get("3_1_d", {}),
+                    "interstate": gstr3b_summary.get("3_2", {}),
+                    "total_taxable": gstr3b_summary.get("total_liability", {}).get("total", 0),
+                },
+                "inward_summary": {
+                    "purchases": {"taxable_value": 0, "igst": 0, "cgst": 0, "sgst": 0, "cess": 0},
+                    "rcm_liability": gstr3b_summary.get("4", {}),
+                },
+                "net_tax_liability": {
+                    "total_liability": gstr3b_summary.get("total_liability", {}),
+                    "total_itc": gstr3b_summary.get("total_itc", {}),
+                    "net_payable": gstr3b_summary.get("total_payable", {}),
+                },
+                "reconciliation": {
+                    "exact_matches": [],
+                    "probable_matches": [],
+                    "gstin_matches": [],
+                    "no_matches": [],
+                },
+                "errors": [],
+            }
+        }
+        
+        # Step 4: Process purchases file if provided
+        if purchases_file and purchases_file.filename:
+            try:
+                contents = await purchases_file.read()
+                if contents:
+                    purchases_df = pd.read_excel(io.BytesIO(contents))
+                    purchases_data = purchases_df.to_dict(orient="records")
+                    
+                    # Run reconciliation
+                    reconciliation = reconcile_invoices(
+                        local_purchases=purchases_data,
+                        supplier_data=[],  # Would be populated from GSTR-2B API
+                        tolerance=0.01
+                    )
+                    
+                    # Categorize entries
+                    for entry in reconciliation.entries:
+                        category = entry["match_category"]
+                        if category == "exact_match":
+                            response["data"]["reconciliation"]["exact_matches"].append(entry)
+                        elif category == "probable_match":
+                            response["data"]["reconciliation"]["probable_matches"].append(entry)
+                        elif category == "gstin_match":
+                            response["data"]["reconciliation"]["gstin_matches"].append(entry)
+                        else:
+                            response["data"]["reconciliation"]["no_matches"].append(entry)
+                    
+                    # Calculate ITC claim
+                    itc_claim = calculate_itc_claim(reconciliation)
+                    
+                    # Update inward summary with ITC
+                    response["data"]["inward_summary"]["itc_claimed"] = itc_claim
+                    
+                    # Update net liability
+                    response["data"]["net_tax_liability"]["itc_claim"] = itc_claim
+                    
+            except Exception as e:
+                logger.warning(f"Error processing purchases file: {str(e)}")
+                response["data"]["errors"].append(f"Failed to process purchases file: {str(e)}")
+        
+        logger.info("GSTR-3B processed successfully")
+        
+        return response
+    
+    except Exception as e:
+        logger.exception(f"Error processing GSTR-3B: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
 @app.post("/download-gstr1-excel")
 async def download_gstr1_excel_post(
     request: GSTR1ExcelRequest,
@@ -804,8 +1247,8 @@ async def download_gstr3b_excel_post(
         from india_compliance.gst_india.gstr1_data import generate_gstr1_tables
         from india_compliance.gst_india.gstr3b_data import generate_gstr3b_summary
         
-        # Generate GSTR-1 tables from clean_data
-        gstr1_tables = generate_gstr1_tables(
+        # Generate GSTR-1 tables from clean_data - FIX: properly unpack tuple
+        gstr1_tables, _ = generate_gstr1_tables(
             clean_data=request.clean_data,
             company_gstin=request.taxpayer_gstin,
             include_hsn=True,
@@ -1173,8 +1616,8 @@ async def download_gstr1_excel_post(
         from india_compliance.gst_india.gstr1_data import generate_gstr1_tables
         from india_compliance.gst_india.exporters.gstr1_excel import export_gstr1_excel
         
-        # Generate GSTR-1 tables from clean_data
-        gstr1_tables = generate_gstr1_tables(
+        # Generate GSTR-1 tables from clean_data - FIX: properly unpack tuple
+        gstr1_tables, _ = generate_gstr1_tables(
             clean_data=request.clean_data,
             company_gstin=request.company_gstin or request.taxpayer_gstin,
             include_hsn=request.include_hsn,

@@ -27,17 +27,38 @@ def flt(value: Any, precision: int = 2) -> float:
 
 def extract_tax_amount(entry: Dict[str, Any], tax_type: str = "igst") -> float:
     """Extract tax amount from GSTR-1 entry, handling nested items."""
-    # Check if it's a direct entry with tax fields
+    # Map standard tax types to GSTR-1 field names
+    field_mapping = {
+        "igst": ["igst", "iamt"],
+        "cgst": ["cgst", "camt"],
+        "sgst": ["sgst", "samt"],
+        "cess": ["cess", "csamt"],
+    }
+    
+    # Check direct field first
     if tax_type in entry:
         return flt(entry.get(tax_type, 0))
+    
+    # Check abbreviated field names
+    if tax_type in field_mapping:
+        for field_name in field_mapping[tax_type]:
+            if field_name in entry:
+                return flt(entry.get(field_name, 0))
     
     # Check if it has nested items (B2B format)
     items = entry.get("items", entry.get("itms", []))
     if items:
         total = 0.0
         for item in items:
+            # Check standard field names
             if tax_type in item:
                 total += flt(item.get(tax_type, 0))
+            # Check abbreviated field names for nested items
+            elif tax_type in field_mapping:
+                for field_name in field_mapping[tax_type]:
+                    if field_name in item:
+                        total += flt(item.get(field_name, 0))
+                        break
             elif f"{tax_type}_amount" in item:
                 total += flt(item.get(f"{tax_type}_amount", 0))
         return total
@@ -47,21 +68,21 @@ def extract_tax_amount(entry: Dict[str, Any], tax_type: str = "igst") -> float:
 
 def extract_taxable_value(entry: Dict[str, Any]) -> float:
     """Extract taxable value from GSTR-1 entry."""
-    # Check direct field
-    if "taxable_value" in entry:
-        return flt(entry.get("taxable_value", 0))
+    # Check direct fields - GSTR-1 uses txval
     if "txval" in entry:
         return flt(entry.get("txval", 0))
+    if "taxable_value" in entry:
+        return flt(entry.get("taxable_value", 0))
     
     # Check nested items
     items = entry.get("items", entry.get("itms", []))
     if items:
         total = 0.0
         for item in items:
-            if "taxable_value" in item:
-                total += flt(item.get("taxable_value", 0))
-            elif "txval" in item:
+            if "txval" in item:
                 total += flt(item.get("txval", 0))
+            elif "taxable_value" in item:
+                total += flt(item.get("taxable_value", 0))
         return total
     
     return 0.0

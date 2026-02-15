@@ -25,7 +25,7 @@ def classify_transaction(row):
         return "B2B"
 
     # B2C
-    if interstate and invoice_value > 250000:
+    if interstate and invoice_value > 100000:
         return "B2CL"
 
     return "B2CS"
