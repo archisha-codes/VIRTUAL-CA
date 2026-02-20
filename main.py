@@ -1094,6 +1094,115 @@ async def process_gstr3b(
         return {"success": False, "error": str(e)}
 
 
+# ============ IMS ENDPOINT ============
+
+@app.post("/api/gstr3b/ims/update")
+async def update_ims_entry(
+    invoice_number: str = Form(...),
+    action: str = Form(...),  # "accept", "reject", "pending"
+    gstr2b_data: str = Form(...),  # JSON string of GSTR-2B data
+    return_period: str = Form(""),
+    taxpayer_gstin: str = Form("")
+):
+    """
+    Update IMS entry action (accept/reject/pending).
+    
+    This endpoint allows users to manually accept, reject, or set pending
+    invoices in the Invoice Management System.
+    """
+    try:
+        from india_compliance.gst_india.gstr3b_ims_engine import (
+            IMSEngine, create_ims_from_gstr2b
+        )
+        
+        # Parse GSTR-2B data
+        gstr2b_list = json.loads(gstr2b_data)
+        if not isinstance(gstr2b_list, list):
+            gstr2b_list = [gstr2b_list]
+        
+        # Create IMS engine and process invoices
+        engine = IMSEngine(return_period, taxpayer_gstin)
+        ims_report = engine.process_invoices(gstr2b_list)
+        
+        # Apply the requested action
+        if action == "accept":
+            success = engine.accept_invoice(invoice_number)
+            action_result = "accepted"
+        elif action == "reject":
+            success = engine.reject_invoice(invoice_number)
+            action_result = "rejected"
+        elif action == "pending":
+            success = engine.set_pending(invoice_number)
+            action_result = "pending"
+        else:
+            return {"success": False, "error": f"Invalid action: {action}"}
+        
+        if not success:
+            return {"success": False, "error": f"Invoice not found: {invoice_number}"}
+        
+        # Get updated IMS report
+        ims_report_dict = ims_report.to_dict()
+        
+        # Get ITC summary
+        itc_summary = engine.get_itc_summary()
+        
+        # Regenerate GSTR-2B with accepted invoices only
+        regenerated_gstr2b = ims_report.regenerate_gstr2b()
+        
+        logger.info(f"IMS update: {invoice_number} -> {action_result}")
+        
+        return {
+            "success": True,
+            "message": f"Invoice {invoice_number} {action_result}",
+            "invoice_number": invoice_number,
+            "action": action_result,
+            "ims_summary": {
+                "accepted_count": ims_report.accepted_count,
+                "rejected_count": ims_report.rejected_count,
+                "pending_count": ims_report.pending_count,
+                "total_eligible_itc": ims_report.total_eligible_itc,
+            },
+            "itc_breakdown": itc_summary,
+            "regenerated_gstr2b": regenerated_gstr2b,
+        }
+        
+    except json.JSONDecodeError as e:
+        return {"success": False, "error": f"Invalid JSON: {str(e)}"}
+    except Exception as e:
+        logger.exception(f"Error updating IMS: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/gstr3b/ims/generate")
+async def generate_ims_report(
+    gstr2b_data: str = Form(...),
+    return_period: str = Form(""),
+    taxpayer_gstin: str = Form("")
+):
+    """
+    Generate IMS report from GSTR-2B data.
+    """
+    try:
+        from india_compliance.gst_india.gstr3b_ims_engine import create_ims_from_gstr2b
+        
+        gstr2b_list = json.loads(gstr2b_data)
+        if not isinstance(gstr2b_list, list):
+            gstr2b_list = [gstr2b_list]
+        
+        ims_report = create_ims_from_gstr2b(gstr2b_list, return_period, taxpayer_gstin)
+        ims_report_dict = ims_report.to_dict()
+        
+        return {
+            "success": True,
+            "data": ims_report_dict,
+            "summary": ims_report_dict.get("summary", {}),
+        }
+        
+    except Exception as e:
+        logger.exception(f"Error generating IMS: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
 @app.post("/download-gstr1-excel")
 async def download_gstr1_excel_post(
     request: GSTR1ExcelRequest,

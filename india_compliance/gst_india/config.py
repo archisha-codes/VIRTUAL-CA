@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     # Frontend URL (for CORS)
     FRONTEND_URL: str = "http://localhost:3000"
     
+    # GST-Specific Settings
+    DEFAULT_GSTIN: str = "27AAAAA1234A1ZA"
+    GST_PORTAL_TOKEN: Optional[str] = None
+    GST_API_SECRET: Optional[str] = None
+    GST_PORTAL_SYNC_ENABLED: bool = False
+    
     @property
     def MAX_FILE_SIZE_BYTES(self) -> int:
         """Convert MB to bytes."""

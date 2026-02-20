@@ -840,7 +840,8 @@ def export_gstr1_excel(clean_data, return_period, taxpayer_gstin, taxpayer_name)
     if isinstance(clean_data, dict) and "b2b" in clean_data:
         gstr1_tables = clean_data
     else:
-        gstr1_tables = generate_gstr1_tables(
+        # generate_gstr1_tables returns a tuple (tables, validation_report)
+        gstr1_tables, _ = generate_gstr1_tables(
             clean_data,
             company_gstin=taxpayer_gstin,
             include_hsn=True,

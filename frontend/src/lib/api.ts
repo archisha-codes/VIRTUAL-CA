@@ -25,17 +25,27 @@ export interface BackendB2BInvoice {
   reverse_charge: boolean;
   invoice_type: string;
   ecommerce_gstin: string;
-  customer: {
+  // Customer can be optional for some invoices
+  customer?: {
     gstin: string;
     name: string;
   };
+  // Support both GSTN format (txval, iamt, camt, samt, csamt, rt) and camelCase format
   items: Array<{
-    taxable_value: number;
-    igst_amount: number;
-    cgst_amount: number;
-    sgst_amount: number;
-    cess_amount: number;
-    tax_rate: number;
+    // GSTN format
+    txval?: number;
+    iamt?: number;
+    camt?: number;
+    samt?: number;
+    csamt?: number;
+    rt?: number;
+    // camelCase format
+    taxable_value?: number;
+    igst_amount?: number;
+    cgst_amount?: number;
+    sgst_amount?: number;
+    cess_amount?: number;
+    tax_rate?: number;
   }>;
 }
 
@@ -46,17 +56,27 @@ export interface BackendB2CLInvoice {
   place_of_supply: string;
   invoice_type: string;
   ecommerce_gstin: string;
-  customer: {
+  // Customer can be optional for some invoices
+  customer?: {
     gstin: string;
     name: string;
   };
+  // Support both GSTN format (txval, iamt, camt, samt, csamt, rt) and camelCase format
   items: Array<{
-    taxable_value: number;
-    igst_amount: number;
-    cgst_amount: number;
-    sgst_amount: number;
-    cess_amount: number;
-    tax_rate: number;
+    // GSTN format
+    txval?: number;
+    iamt?: number;
+    camt?: number;
+    samt?: number;
+    csamt?: number;
+    rt?: number;
+    // camelCase format
+    taxable_value?: number;
+    igst_amount?: number;
+    cgst_amount?: number;
+    sgst_amount?: number;
+    cess_amount?: number;
+    tax_rate?: number;
   }>;
   shipping_bill?: {
     bill_no: string;
@@ -81,13 +101,22 @@ export interface BackendB2CSEntry {
   place_of_supply?: string;
   invoice_type?: string;
   ecommerce_gstin?: string;
+  // Support both GSTN format and camelCase format in nested items
   items?: Array<{
-    taxable_value: number;
-    igst_amount: number;
-    cgst_amount: number;
-    sgst_amount: number;
-    cess_amount: number;
-    tax_rate: number;
+    // GSTN format
+    txval?: number;
+    iamt?: number;
+    camt?: number;
+    samt?: number;
+    csamt?: number;
+    rt?: number;
+    // camelCase format
+    taxable_value?: number;
+    igst_amount?: number;
+    cgst_amount?: number;
+    sgst_amount?: number;
+    cess_amount?: number;
+    tax_rate?: number;
   }>;
 }
 
@@ -98,17 +127,24 @@ export interface BackendExportInvoice {
   place_of_supply: string;
   invoice_type: string;
   ecommerce_gstin: string;
-  customer: {
+  // Customer can be optional for some invoices
+  customer?: {
     gstin: string;
     name: string;
   };
+  // Support both GSTN format (txval, iamt, rt) and camelCase format
   items: Array<{
-    taxable_value: number;
-    igst_amount: number;
-    cgst_amount: number;
-    sgst_amount: number;
-    cess_amount: number;
-    tax_rate: number;
+    // GSTN format
+    txval?: number;
+    iamt?: number;
+    rt?: number;
+    // camelCase format
+    taxable_value?: number;
+    igst_amount?: number;
+    cgst_amount?: number;
+    sgst_amount?: number;
+    cess_amount?: number;
+    tax_rate?: number;
   }>;
   shipping_bill?: {
     bill_no: string;
@@ -125,17 +161,27 @@ export interface BackendCDNREntry {
   reverse_charge: boolean;
   invoice_type: string;
   ecommerce_gstin: string;
-  customer: {
+  // Customer can be optional for some entries
+  customer?: {
     gstin: string;
     name: string;
   };
+  // Support both GSTN format (txval, iamt, camt, samt, csamt, rt) and camelCase format
   items: Array<{
-    taxable_value: number;
-    igst_amount: number;
-    cgst_amount: number;
-    sgst_amount: number;
-    cess_amount: number;
-    tax_rate: number;
+    // GSTN format
+    txval?: number;
+    iamt?: number;
+    camt?: number;
+    samt?: number;
+    csamt?: number;
+    rt?: number;
+    // camelCase format
+    taxable_value?: number;
+    igst_amount?: number;
+    cgst_amount?: number;
+    sgst_amount?: number;
+    cess_amount?: number;
+    tax_rate?: number;
   }>;
 }
 

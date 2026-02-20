@@ -1,0 +1,256 @@
+/* GSTR-1 Excel-like Table Styles */
+
+/* ========================================
+   PART 1: Table Wrapper & Container
+   ======================================== */
+
+.gstr-tables-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.gstr-tables-list {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.gstr-table-wrapper {
+  margin-bottom: 0;
+}
+
+/* ========================================
+   PART 2: Table Header Styles
+   ======================================== */
+
+.gstr-table-header {
+  margin-bottom: 8px;
+}
+
+.gstr-table-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--foreground);
+}
+
+.gstr-table-description {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin: 0;
+}
+
+/* ========================================
+   PART 3: Excel Table Styles
+   ======================================== */
+
+.gstr-excel-table {
+  overflow-x: auto;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+}
+
+.gstr-excel-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Header Styles */
+.gstr-excel-table thead {
+  background-color: #f3f6fb;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.gstr-excel-table th {
+  background-color: #f3f6fb;
+  border: 1px solid #d0d7de;
+  padding: 6px 10px;
+  text-align: left;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #1f4e79;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* Cell Styles */
+.gstr-excel-table td {
+  border: 1px solid #e0e0e0;
+  padding: 5px 10px;
+  white-space: nowrap;
+  color: #333;
+}
+
+.gstr-excel-table tr:nth-child(even) {
+  background-color: #fafafa;
+}
+
+.gstr-excel-table tr:hover {
+  background-color: #f0f7ff;
+}
+
+/* Row Number Column */
+.gstr-excel-table td.row-number,
+.gstr-excel-table th.row-number {
+  background-color: #f5f5f5;
+  color: #666;
+  font-size: 10px;
+  text-align: center;
+  width: 40px;
+  min-width: 40px;
+  font-weight: 500;
+}
+
+/* ========================================
+   PART 4: Summary Card Styles
+   ======================================== */
+
+.gstr-summary-card {
+  margin-bottom: 20px;
+}
+
+.gstr-summary-card .card-header {
+  padding-bottom: 12px;
+}
+
+.gstr-summary-card .card-title {
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gstr-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.gstr-summary-item {
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  background-color: #f8fafc;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+}
+
+.gstr-summary-label {
+  font-size: 11px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 4px;
+}
+
+.gstr-summary-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f4e79;
+}
+
+/* ========================================
+   PART 5: Professional Color Palette
+   ======================================== */
+
+:root {
+  --primary-blue: #1f4e79;
+  --accent-yellow: #ffc000;
+  --excel-border: #d0d7de;
+  --excel-header-bg: #f3f6fb;
+  --excel-row-alt: #fafafa;
+  --excel-row-hover: #f0f7ff;
+}
+
+/* ========================================
+   PART 6: Responsive Adjustments
+   ======================================== */
+
+@media (max-width: 768px) {
+  .gstr-summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .gstr-excel-table {
+    font-size: 11px;
+  }
+  
+  .gstr-excel-table th,
+  .gstr-excel-table td {
+    padding: 4px 6px;
+  }
+}
+
+@media (max-width: 480px) {
+  .gstr-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ========================================
+   PART 7: Nested Data Rendering (ISSUE 1)
+   ======================================== */
+
+.gstr-excel-table td.has-nested-data {
+  padding: 4px 8px;
+}
+
+.nested-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nested-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 11px;
+  border-bottom: 1px dashed #e5e7eb;
+}
+
+.nested-item:last-child {
+  border-bottom: none;
+}
+
+.nested-main {
+  font-weight: 500;
+  color: #1f4e79;
+  min-width: 80px;
+}
+
+.nested-secondary {
+  color: #6b7280;
+  font-size: 10px;
+}
+
+.nested-number {
+  color: #059669;
+  font-weight: 500;
+}
+
+.nested-tax {
+  color: #dc2626;
+  font-size: 10px;
+}
+
+.inline-nested {
+  font-size: 11px;
+}
+
+.gstr-empty-message {
+  padding: 20px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 13px;
+  background-color: #f9fafb;
+  border-radius: 4px;
+}

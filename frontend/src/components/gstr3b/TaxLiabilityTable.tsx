@@ -11,13 +11,16 @@ function formatCurrency(value: number): string {
 }
 
 export function TaxLiabilityTable({ data }: TaxLiabilityTableProps) {
+  // ISSUE 5: Clear labeling for tax payable
   const rows = [
     { 
       label: '(a) Tax payable on outward supplies',
+      description: 'Output tax on sales',
       ...data.onOutwardSupplies,
     },
     { 
-      label: '(b) Tax payable on reverse charge',
+      label: '(b) Tax payable on reverse charge (RCM)',
+      description: 'Reverse Charge Mechanism liability',
       ...data.onReverseCharge,
     },
   ];
@@ -52,7 +55,12 @@ export function TaxLiabilityTable({ data }: TaxLiabilityTableProps) {
             <TableBody>
               {rows.map((row, index) => (
                 <TableRow key={index}>
-                  <TableCell className="font-medium text-sm">{row.label}</TableCell>
+                  <TableCell className="font-medium text-sm">
+                    {row.label}
+                    {row.description && (
+                      <p className="text-xs text-muted-foreground font-normal">{row.description}</p>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">{formatCurrency(row.igst)}</TableCell>
                   <TableCell className="text-right">{formatCurrency(row.cgst)}</TableCell>
                   <TableCell className="text-right">{formatCurrency(row.sgst)}</TableCell>

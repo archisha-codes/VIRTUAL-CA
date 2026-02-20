@@ -172,24 +172,34 @@ function transformBackendB2BToFrontend(b2b: BackendB2BInvoice[]): B2BCustomer[] 
   const customerMap = new Map<string, B2BCustomer>();
   
   b2b.forEach((invoice) => {
-    const gstin = invoice.customer.gstin;
+    const gstin = invoice.customer?.gstin || '';
     const existing = customerMap.get(gstin);
+    
+    // Backend returns GSTN format: txval, iamt, camt, samt, csamt, rt
+    // We need to handle both formats for backwards compatibility
+    const firstItem = invoice.items?.[0] || {};
+    const taxableValue = firstItem.txval ?? firstItem.taxable_value ?? 0;
+    const igst = firstItem.iamt ?? firstItem.igst_amount ?? 0;
+    const cgst = firstItem.camt ?? firstItem.cgst_amount ?? 0;
+    const sgst = firstItem.samt ?? firstItem.sgst_amount ?? 0;
+    const cess = firstItem.csamt ?? firstItem.cess_amount ?? 0;
+    const rate = firstItem.rt ?? firstItem.tax_rate ?? 0;
     
     const invoiceData: B2BInvoice = {
       customerGstin: gstin,
-      customerName: invoice.customer.name || 'Unknown',
-      invoiceNumber: invoice.invoice_no,
-      invoiceDate: invoice.invoice_date,
-      invoiceValue: invoice.invoice_value,
-      placeOfSupply: invoice.place_of_supply,
+      customerName: invoice.customer?.name || 'Unknown',
+      invoiceNumber: invoice.invoice_no || '',
+      invoiceDate: invoice.invoice_date || '',
+      invoiceValue: invoice.invoice_value || 0,
+      placeOfSupply: invoice.place_of_supply || '',
       reverseCharge: invoice.reverse_charge ? 'Y' : 'N',
-      invoiceType: invoice.invoice_type,
-      taxableValue: invoice.items[0]?.taxable_value || 0,
-      igst: invoice.items[0]?.igst_amount || 0,
-      cgst: invoice.items[0]?.cgst_amount || 0,
-      sgst: invoice.items[0]?.sgst_amount || 0,
-      cess: invoice.items[0]?.cess_amount || 0,
-      rate: invoice.items[0]?.tax_rate || 0,
+      invoiceType: invoice.invoice_type || 'Regular',
+      taxableValue,
+      igst,
+      cgst,
+      sgst,
+      cess,
+      rate,
     };
     
     const tax = invoiceData.igst + invoiceData.cgst + invoiceData.sgst;
@@ -201,7 +211,7 @@ function transformBackendB2BToFrontend(b2b: BackendB2BInvoice[]): B2BCustomer[] 
     } else {
       customerMap.set(gstin, {
         customerGstin: gstin,
-        customerName: invoice.customer.name || 'Unknown',
+        customerName: invoice.customer?.name || 'Unknown',
         invoices: [invoiceData],
         totalTaxableValue: invoiceData.taxableValue,
         totalTax: tax,
@@ -215,16 +225,25 @@ function transformBackendB2BToFrontend(b2b: BackendB2BInvoice[]): B2BCustomer[] 
 }
 
 function transformBackendB2CLToFrontend(b2cl: BackendB2CLInvoice[]): B2CLInvoice[] {
-  return b2cl.map((invoice) => ({
-    placeOfSupply: invoice.place_of_supply,
-    invoiceNumber: invoice.invoice_no,
-    invoiceDate: invoice.invoice_date,
-    invoiceValue: invoice.invoice_value,
-    taxableValue: invoice.items[0]?.taxable_value || 0,
-    igst: invoice.items[0]?.igst_amount || 0,
-    cess: invoice.items[0]?.cess_amount || 0,
-    rate: invoice.items[0]?.tax_rate || 0,
-  }));
+  return b2cl.map((invoice) => {
+    // Backend returns GSTN format: txval, iamt, camt, samt, csamt, rt
+    const firstItem = invoice.items?.[0] || {};
+    const taxableValue = firstItem.txval ?? firstItem.taxable_value ?? 0;
+    const igst = firstItem.iamt ?? firstItem.igst_amount ?? 0;
+    const cess = firstItem.csamt ?? firstItem.cess_amount ?? 0;
+    const rate = firstItem.rt ?? firstItem.tax_rate ?? 0;
+    
+    return {
+      placeOfSupply: invoice.place_of_supply || '',
+      invoiceNumber: invoice.invoice_no || '',
+      invoiceDate: invoice.invoice_date || '',
+      invoiceValue: invoice.invoice_value || 0,
+      taxableValue,
+      igst,
+      cess,
+      rate,
+    };
+  });
 }
 
 function transformBackendB2CSToFrontend(b2cs: BackendB2CSEntry[]): B2CSSummary[] {
@@ -232,15 +251,32 @@ function transformBackendB2CSToFrontend(b2cs: BackendB2CSEntry[]): B2CSSummary[]
   const summaryMap = new Map<string, B2CSSummary>();
   
   b2cs.forEach((entry) => {
-    const pos = entry.place_of_supply;
-    const rate = entry.items[0]?.tax_rate || 0;
+    // Handle both flat format (pos, rt, txval, etc.) and nested format
+    const pos = entry.pos || entry.place_of_supply || '';
+    const rate = entry.rt ?? entry.items?.[0]?.tax_rate ?? 0;
     const key = `${pos}-${rate}`;
     
     const existing = summaryMap.get(key);
-    const taxableValue = entry.items[0]?.taxable_value || 0;
-    const igst = entry.items[0]?.igst_amount || 0;
-    const cgst = entry.items[0]?.cgst_amount || 0;
-    const sgst = entry.items[0]?.sgst_amount || 0;
+    
+    // Handle both flat format and nested items format
+    let taxableValue: number, igst: number, cgst: number, sgst: number, cess: number;
+    
+    if (entry.txval !== undefined) {
+      // Flat format from backend
+      taxableValue = entry.txval ?? 0;
+      igst = entry.iamt ?? 0;
+      cgst = entry.camt ?? 0;
+      sgst = entry.samt ?? 0;
+      cess = entry.csamt ?? 0;
+    } else {
+      // Nested items format
+      const firstItem = entry.items?.[0] || {};
+      taxableValue = firstItem.txval ?? firstItem.taxable_value ?? 0;
+      igst = firstItem.iamt ?? firstItem.igst_amount ?? 0;
+      cgst = firstItem.camt ?? firstItem.cgst_amount ?? 0;
+      sgst = firstItem.samt ?? firstItem.sgst_amount ?? 0;
+      cess = firstItem.csamt ?? firstItem.cess_amount ?? 0;
+    }
     
     // Determine if inter-state (IGST > 0 means inter-state)
     const supplyType = igst > 0 ? 'INTER' : 'INTRA';
@@ -258,7 +294,7 @@ function transformBackendB2CSToFrontend(b2cs: BackendB2CSEntry[]): B2CSSummary[]
         igst,
         cgst,
         sgst,
-        cess: entry.items[0]?.cess_amount || 0,
+        cess,
         rate,
       });
     }
@@ -268,19 +304,27 @@ function transformBackendB2CSToFrontend(b2cs: BackendB2CSEntry[]): B2CSSummary[]
 }
 
 function transformBackendExportToFrontend(exports: BackendExportInvoice[]): ExportInvoice[] {
-  return exports.map((invoice) => ({
-    invoiceNumber: invoice.invoice_no,
-    invoiceDate: invoice.invoice_date,
-    invoiceValue: invoice.invoice_value,
-    taxableValue: invoice.items[0]?.taxable_value || 0,
-    igst: invoice.items[0]?.igst_amount || 0,
-    rate: invoice.items[0]?.tax_rate || 0,
-    shippingBill: invoice.shipping_bill ? {
-      billNo: invoice.shipping_bill.bill_no,
-      billDate: invoice.shipping_bill.bill_date,
-      portCode: invoice.shipping_bill.port_code,
-    } : undefined,
-  }));
+  return exports.map((invoice) => {
+    // Backend returns GSTN format: txval, iamt, rt
+    const firstItem = invoice.items?.[0] || {};
+    const taxableValue = firstItem.txval ?? firstItem.taxable_value ?? 0;
+    const igst = firstItem.iamt ?? firstItem.igst_amount ?? 0;
+    const rate = firstItem.rt ?? firstItem.tax_rate ?? 0;
+    
+    return {
+      invoiceNumber: invoice.invoice_no || '',
+      invoiceDate: invoice.invoice_date || '',
+      invoiceValue: invoice.invoice_value || 0,
+      taxableValue,
+      igst,
+      rate,
+      shippingBill: invoice.shipping_bill ? {
+        billNo: invoice.shipping_bill.bill_no,
+        billDate: invoice.shipping_bill.bill_date,
+        portCode: invoice.shipping_bill.port_code,
+      } : undefined,
+    };
+  });
 }
 
 function transformBackendCDNRToFrontend(cdnr: BackendCDNREntry[]): CDNRCustomer[] {
@@ -288,23 +332,32 @@ function transformBackendCDNRToFrontend(cdnr: BackendCDNREntry[]): CDNRCustomer[
   const customerMap = new Map<string, CDNRCustomer>();
   
   cdnr.forEach((note) => {
-    const gstin = note.customer.gstin;
+    const gstin = note.customer?.gstin || '';
     const existing = customerMap.get(gstin);
+    
+    // Backend returns GSTN format: txval, iamt, camt, samt, csamt, rt
+    const firstItem = note.items?.[0] || {};
+    const taxableValue = firstItem.txval ?? firstItem.taxable_value ?? 0;
+    const igst = firstItem.iamt ?? firstItem.igst_amount ?? 0;
+    const cgst = firstItem.camt ?? firstItem.cgst_amount ?? 0;
+    const sgst = firstItem.samt ?? firstItem.sgst_amount ?? 0;
+    const cess = firstItem.csamt ?? firstItem.cess_amount ?? 0;
+    const rate = firstItem.rt ?? firstItem.tax_rate ?? 0;
     
     const noteData: CDNRNote = {
       customerGstin: gstin,
-      customerName: note.customer.name || 'Unknown',
-      noteNumber: note.invoice_no,
-      noteDate: note.invoice_date,
+      customerName: note.customer?.name || 'Unknown',
+      noteNumber: note.invoice_no || '',
+      noteDate: note.invoice_date || '',
       noteType: note.invoice_type === 'C' ? 'C' : 'D',
-      noteValue: note.invoice_value,
-      placeOfSupply: note.place_of_supply,
-      taxableValue: note.items[0]?.taxable_value || 0,
-      igst: note.items[0]?.igst_amount || 0,
-      cgst: note.items[0]?.cgst_amount || 0,
-      sgst: note.items[0]?.sgst_amount || 0,
-      cess: note.items[0]?.cess_amount || 0,
-      rate: note.items[0]?.tax_rate || 0,
+      noteValue: note.invoice_value || 0,
+      placeOfSupply: note.place_of_supply || '',
+      taxableValue,
+      igst,
+      cgst,
+      sgst,
+      cess,
+      rate,
     };
     
     const tax = noteData.igst + noteData.cgst + noteData.sgst;
@@ -316,7 +369,7 @@ function transformBackendCDNRToFrontend(cdnr: BackendCDNREntry[]): CDNRCustomer[
     } else {
       customerMap.set(gstin, {
         customerGstin: gstin,
-        customerName: note.customer.name || 'Unknown',
+        customerName: note.customer?.name || 'Unknown',
         notes: [noteData],
         totalTaxableValue: noteData.taxableValue,
         totalTax: tax,

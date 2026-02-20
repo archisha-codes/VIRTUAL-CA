@@ -30,6 +30,9 @@ import json
 # CONSTANTS AND CONFIGURATION
 # =============================================================================
 
+# GST rate validation (as per GSTN rules)
+ALLOWED_GST_RATES = {0, 0.1, 0.25, 3, 5, 12, 18, 28}
+
 # GSTIN regex pattern (as per GSTN specifications)
 GSTIN_PATTERN = re.compile(
     r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$"
@@ -710,6 +713,195 @@ def validate_hsn_code(
     return None
 
 
+def validate_gst_rate(
+    row: pd.Series,
+    rule: ValidationRule,
+    **kwargs
+) -> Optional[ValidationResult]:
+    """
+    Validate that GST rate is one of the allowed rates.
+    
+    As per GSTN rules, allowed rates are:
+    - 0% (Exempt/Nil rated)
+    - 0.1%
+    - 0.25%
+    - 3%
+    - 5%
+    - 12%
+    - 18%
+    - 28%
+    """
+    rate = row.get("rate")
+    
+    if pd.isna(rate):
+        return ValidationResult(
+            rule_name=rule.name,
+            category=ValidationCategory.TAX,
+            severity=ValidationSeverity.WARNING,
+            message="Rate is required for tax calculation",
+            field="rate",
+            value=rate,
+            suggestion="Add GST rate (0, 0.1, 0.25, 3, 5, 12, 18, or 28)",
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+    
+    try:
+        rate_value = float(rate)
+    except (TypeError, ValueError):
+        return ValidationResult(
+            rule_name=rule.name,
+            category=ValidationCategory.TAX,
+            severity=rule.severity,
+            message=f"Invalid rate format: {rate}",
+            field="rate",
+            value=rate,
+            suggestion="Rate must be a number",
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+    
+    # Check if rate is in allowed list (with small tolerance for float comparison)
+    rate_found = False
+    for allowed_rate in ALLOWED_GST_RATES:
+        if abs(rate_value - allowed_rate) < 0.001:
+            rate_found = True
+            break
+    
+    if not rate_found:
+        return ValidationResult(
+            rule_name=rule.name,
+            category=ValidationCategory.TAX,
+            severity=ValidationSeverity.WARNING,
+            message=f"Non-standard GST rate: {rate_value}%",
+            field="rate",
+            value=rate_value,
+            suggestion=f"Allowed rates: {sorted(ALLOWED_GST_RATES)}",
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+    
+    return None
+
+
+def validate_invoice_date_vs_return_period(
+    row: pd.Series,
+    rule: ValidationRule,
+    **kwargs
+) -> Optional[ValidationResult]:
+    """
+    Validate that invoice date falls within the return period.
+    
+    The return period should be in format MMYYYY (e.g., 012025 for January 2025)
+    """
+    invoice_date = row.get("invoice_date")
+    return_period = kwargs.get("return_period")
+    
+    if not invoice_date or pd.isna(invoice_date):
+        return None  # Date validation already handles missing dates
+    
+    # Parse invoice date
+    parsed_date = None
+    if isinstance(invoice_date, (datetime, date)):
+        parsed_date = invoice_date if isinstance(invoice_date, date) else invoice_date.date()
+    else:
+        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d %b %Y", "%d %B %Y"]:
+            try:
+                parsed_date = datetime.strptime(str(invoice_date), fmt).date()
+                break
+            except ValueError:
+                continue
+    
+    if parsed_date is None or return_period is None:
+        return None
+    
+    # Parse return period (format: MMYYYY)
+    try:
+        return_period_str = str(return_period).strip()
+        if len(return_period_str) == 6:  # MMYYYY
+            return_month = int(return_period_str[:2])
+            return_year = int(return_period_str[2:])
+            return_period_start = date(return_year, return_month, 1)
+            # End of month
+            if return_month == 12:
+                return_period_end = date(return_year, 12, 31)
+            else:
+                return_period_end = date(return_year, return_month + 1, 1) - timedelta(days=1)
+        else:
+            return None  # Invalid format, skip validation
+    except (ValueError, IndexError):
+        return None
+    
+    # Check if invoice date is within return period
+    if parsed_date < return_period_start or parsed_date > return_period_end:
+        return ValidationResult(
+            rule_name=rule.name,
+            category=ValidationCategory.DATE,
+            severity=ValidationSeverity.WARNING,
+            message=f"Invoice date {parsed_date} is outside return period {return_period_start.strftime('%b %Y')} to {return_period_end.strftime('%b %Y')}",
+            field="invoice_date",
+            value=invoice_date,
+            expected=f"{return_period_start.strftime('%d/%m/%Y')} - {return_period_end.strftime('%d/%m/%Y')}",
+            suggestion="Verify invoice date matches the filing period",
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+    
+    return None
+
+
+def validate_multi_rate_invoice(
+    row: pd.Series,
+    rule: ValidationRule,
+    **kwargs
+) -> Optional[ValidationResult]:
+    """
+    Validate multi-rate invoice handling.
+    
+    GSTR-1 requires that invoices with multiple tax rates be split into
+    separate line items. This check verifies the rate is consistent.
+    
+    For proper multi-rate handling, invoices should be grouped by:
+    (invoice_number, rate) not just invoice_number
+    """
+    invoice_number = row.get("invoice_number")
+    rate = row.get("rate")
+    
+    if pd.isna(invoice_number) or pd.isna(rate):
+        return None
+    
+    # This check is informational - the actual grouping is handled in gstr1_data.py
+    # We just verify that rate is present and valid
+    try:
+        rate_value = float(rate)
+        if rate_value < 0:
+            return ValidationResult(
+                rule_name=rule.name,
+                category=ValidationCategory.TAX,
+                severity=rule.severity,
+                message=f"Negative rate not allowed: {rate_value}",
+                field="rate",
+                value=rate,
+                suggestion="Rate must be non-negative",
+                error_code=rule.error_code,
+                row_index=kwargs.get("row_index")
+            )
+    except (TypeError, ValueError):
+        return ValidationResult(
+            rule_name=rule.name,
+            category=ValidationCategory.TAX,
+            severity=rule.severity,
+            message=f"Invalid rate format: {rate}",
+            field="rate",
+            value=rate,
+            suggestion="Rate must be a number",
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+    
+    return None
+
+
 # =============================================================================
 # MAIN VALIDATION ENGINE
 # =============================================================================
@@ -730,7 +922,8 @@ class ValidationEngine:
         rounding_tolerance: float = ROUNDING_TOLERANCE,
         strict_mode: bool = False,
         filing_period_start: Optional[date] = None,
-        filing_period_end: Optional[date] = None
+        filing_period_end: Optional[date] = None,
+        return_period: Optional[str] = None
     ):
         """
         Initialize the validation engine.
@@ -740,11 +933,13 @@ class ValidationEngine:
             strict_mode: If True, fail on any warning
             filing_period_start: Start of filing period
             filing_period_end: End of filing period
+            return_period: Return period in MMYYYY format (e.g., "012025")
         """
         self.rounding_tolerance = rounding_tolerance
         self.strict_mode = strict_mode
         self.filing_period_start = filing_period_start
         self.filing_period_end = filing_period_end
+        self.return_period = return_period
         self.rules: List[ValidationRule] = []
         self._build_default_rules()
     
@@ -861,6 +1056,39 @@ class ValidationEngine:
             suggestion="Invoice value should equal taxable + taxes",
             error_code="VAL_AMT_CONSISTENCY"
         ))
+        
+        # ADD: Strict rate validation
+        self.add_rule(ValidationRule(
+            name="gst_rate_validation",
+            category=ValidationCategory.TAX,
+            severity=ValidationSeverity.WARNING,
+            check_func=validate_gst_rate,
+            message="GST rate validation (0, 0.1, 0.25, 3, 5, 12, 18, 28)",
+            suggestion="Use standard GST rates only",
+            error_code="VAL_TAX_RATE"
+        ))
+        
+        # ADD: Return period validation
+        self.add_rule(ValidationRule(
+            name="invoice_date_vs_return_period",
+            category=ValidationCategory.DATE,
+            severity=ValidationSeverity.WARNING,
+            check_func=validate_invoice_date_vs_return_period,
+            message="Invoice date should match return period",
+            suggestion="Ensure invoice date falls within the filing period",
+            error_code="VAL_DATE_PERIOD"
+        ))
+        
+        # ADD: Multi-rate invoice check
+        self.add_rule(ValidationRule(
+            name="multi_rate_invoice",
+            category=ValidationCategory.TAX,
+            severity=ValidationSeverity.INFO,
+            check_func=validate_multi_rate_invoice,
+            message="Multi-rate invoice validation",
+            suggestion="Invoices with multiple rates should be split by rate",
+            error_code="VAL_TAX_MULTI_RATE"
+        ))
     
     def add_rule(self, rule: ValidationRule):
         """Add a custom validation rule."""
@@ -928,7 +1156,8 @@ class ValidationEngine:
                 row_index=row_index,
                 filing_period_start=self.filing_period_start,
                 filing_period_end=self.filing_period_end,
-                supplier_gstin=supplier_gstin
+                supplier_gstin=supplier_gstin,
+                return_period=self.return_period
             )
             
             if result is not None:
@@ -1013,6 +1242,7 @@ class ValidationEngine:
 def validate_rows(
     df: pd.DataFrame,
     supplier_gstin: Optional[str] = None,
+    return_period: Optional[str] = None,
     **kwargs
 ) -> ValidationReport:
     """
@@ -1021,18 +1251,20 @@ def validate_rows(
     Args:
         df: DataFrame to validate
         supplier_gstin: Supplier's GSTIN
+        return_period: Return period in MMYYYY format (e.g., "012025")
         **kwargs: Additional arguments for ValidationEngine
     
     Returns:
         ValidationReport
     """
-    engine = ValidationEngine(**kwargs)
+    engine = ValidationEngine(return_period=return_period, **kwargs)
     return engine.validate_dataframe(df, supplier_gstin)
 
 
 def validate_and_correct(
     df: pd.DataFrame,
     supplier_gstin: Optional[str] = None,
+    return_period: Optional[str] = None,
     **kwargs
 ) -> Tuple[pd.DataFrame, ValidationReport]:
     """
@@ -1041,12 +1273,13 @@ def validate_and_correct(
     Args:
         df: DataFrame to validate
         supplier_gstin: Supplier's GSTIN
+        return_period: Return period in MMYYYY format
         **kwargs: Additional arguments
     
     Returns:
         Tuple of (corrected DataFrame, ValidationReport)
     """
-    engine = ValidationEngine(**kwargs)
+    engine = ValidationEngine(return_period=return_period, **kwargs)
     report = engine.validate_dataframe(df, supplier_gstin)
     df_corrected = engine.apply_corrections(df, report)
     return df_corrected, report

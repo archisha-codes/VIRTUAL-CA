@@ -11,22 +11,27 @@ function formatCurrency(value: number): string {
 }
 
 export function OutwardSuppliesTable({ data }: OutwardSuppliesTableProps) {
+  // ISSUE 5: Clear labeling for RCM
   const rows = [
     { 
       label: '(a) Outward taxable supplies (other than zero rated, nil rated and exempted)', 
-      ...data.taxableSupplies 
+      ...data.taxableSupplies,
+      sublabel: 'Regular interstate and intrastate supplies'
     },
     { 
       label: '(b) Outward taxable supplies (zero rated)', 
-      ...data.zeroRatedSupplies 
+      ...data.zeroRatedSupplies,
+      sublabel: 'Export with/without IGST'
     },
     { 
       label: '(c) Other outward supplies (Nil rated, exempted)', 
-      ...data.nilRatedSupplies 
+      ...data.nilRatedSupplies,
+      sublabel: 'Exempt and nil-rated supplies'
     },
     { 
-      label: '(d) Inward supplies (liable to reverse charge)', 
-      ...data.reverseChargeSupplies 
+      label: '(d) Inward supplies (liable to reverse charge) - RCM', 
+      ...data.reverseChargeSupplies,
+      sublabel: 'Includes Reverse Charge liability'
     },
     { 
       label: '(e) Non-GST outward supplies', 
@@ -35,6 +40,7 @@ export function OutwardSuppliesTable({ data }: OutwardSuppliesTableProps) {
       cgst: 0,
       sgst: 0,
       cess: 0,
+      sublabel: 'Alcohol, petroleum, etc.'
     },
   ];
 
@@ -71,7 +77,12 @@ export function OutwardSuppliesTable({ data }: OutwardSuppliesTableProps) {
             <TableBody>
               {rows.map((row, index) => (
                 <TableRow key={index}>
-                  <TableCell className="font-medium text-sm">{row.label}</TableCell>
+                  <TableCell className="font-medium text-sm">
+                    {row.label}
+                    {row.sublabel && (
+                      <p className="text-xs text-muted-foreground font-normal">{row.sublabel}</p>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">{formatCurrency(row.taxableValue)}</TableCell>
                   <TableCell className="text-right">{formatCurrency(row.igst)}</TableCell>
                   <TableCell className="text-right">{formatCurrency(row.cgst)}</TableCell>

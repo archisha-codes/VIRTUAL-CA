@@ -46,8 +46,11 @@ logger.addHandler(console_handler)
 
 logger = logging.getLogger(__name__)
 
-# B2C Large threshold (₹2.5 lakh)
-B2C_LARGE_THRESHOLD = 250000
+import os
+
+# B2C Large threshold for inter-state B2C (₹1 lakh)
+# This is used for B2CL classification (inter-state sales to unregistered persons > threshold)
+B2C_LARGE_THRESHOLD = int(os.environ.get("B2C_LARGE_THRESHOLD", 100000))
 
 
 def flt(value: Any, precision: int = 2) -> float:
