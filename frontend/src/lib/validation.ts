@@ -87,6 +87,29 @@ export function validateTaxCalculation(
   return errors;
 }
 
+export function validateTaxRate(
+  taxableValue: number,
+  taxRate: number,
+  taxAmount: number
+): ValidationError[] {
+  const errors: ValidationError[] = [];
+  
+  if (taxableValue <= 0 || taxRate <= 0) return errors;
+  
+  const expectedTax = (taxableValue * taxRate) / 100;
+  const tolerance = Math.max(1, expectedTax * 0.01); // 1% tolerance
+  
+  if (Math.abs(expectedTax - taxAmount) > tolerance) {
+    errors.push({
+      field: 'tax_amount',
+      message: `Tax amount mismatch: Expected ₹${expectedTax.toFixed(2)} (${taxRate}% of ₹${taxableValue}), got ₹${taxAmount.toFixed(2)}`,
+      severity: 'error',
+    });
+  }
+  
+  return errors;
+}
+
 export function validateInvoiceNumber(invoiceNo: string | null | undefined): ValidationError | null {
   if (!invoiceNo || invoiceNo.trim() === '') {
     return { field: 'invoice_number', message: 'Invoice number is missing', severity: 'error' };
@@ -114,7 +137,7 @@ export function validateInvoiceDate(date: Date | string | null | undefined): Val
   return null;
 }
 
-export function validateInvoice(invoice: {
+export interface Invoice {
   invoice_number?: string | null;
   invoice_date?: string | Date | null;
   customer_gstin?: string | null;
@@ -124,7 +147,9 @@ export function validateInvoice(invoice: {
   sgst_amount?: number;
   igst_amount?: number;
   total_amount?: number;
-}): ValidationResult {
+}
+
+export function validateInvoice(invoice: Invoice): ValidationResult {
   const errors: ValidationError[] = [];
 
   // Validate invoice number
@@ -163,7 +188,7 @@ export function validateInvoice(invoice: {
   };
 }
 
-export function validatePurchaseInvoice(invoice: {
+export interface PurchaseInvoice {
   invoice_number?: string | null;
   invoice_date?: string | Date | null;
   supplier_gstin?: string | null;
@@ -173,7 +198,9 @@ export function validatePurchaseInvoice(invoice: {
   sgst_amount?: number;
   igst_amount?: number;
   total_amount?: number;
-}): ValidationResult {
+}
+
+export function validatePurchaseInvoice(invoice: PurchaseInvoice): ValidationResult {
   const errors: ValidationError[] = [];
 
   // Validate invoice number
@@ -244,4 +271,93 @@ export function determineInvoiceType(
   }
 
   return 'B2CS';
+}
+
+// Duplicate Invoice Detection
+
+interface InvoiceKey {
+  invoiceNumber: string;
+  gstin: string;
+}
+
+export function findDuplicateInvoices(
+  invoices: Invoice[]
+): { duplicates: InvoiceKey[]; originalIndices: number[]; duplicateIndices: number[] } {
+  const seen = new Map<string, number>();
+  const duplicates: InvoiceKey[] = [];
+  const originalIndices: number[] = [];
+  const duplicateIndices: number[] = [];
+
+  invoices.forEach((invoice, index) => {
+    const invoiceNumber = (invoice.invoice_number || '').toUpperCase().trim();
+    const gstin = (invoice.customer_gstin || '').toUpperCase().trim();
+    
+    // Create composite key: invoice_number + gstin
+    const key = `${invoiceNumber}|${gstin}`;
+    
+    if (seen.has(key)) {
+      // This is a duplicate
+      duplicates.push({ invoiceNumber, gstin });
+      originalIndices.push(seen.get(key)!);
+      duplicateIndices.push(index);
+    } else {
+      // First occurrence
+      seen.set(key, index);
+    }
+  });
+
+  return { duplicates, originalIndices, duplicateIndices };
+}
+
+export function validateForDuplicates(invoices: Invoice[]): ValidationError[] {
+  const errors: ValidationError[] = [];
+  const { duplicates, originalIndices, duplicateIndices } = findDuplicateInvoices(invoices);
+
+  duplicates.forEach((dup, idx) => {
+    errors.push({
+      field: 'invoice_number',
+      message: `Duplicate invoice: "${dup.invoiceNumber}" with GSTIN "${dup.gstin}" found at rows ${originalIndices[idx] + 1} and ${duplicateIndices[idx] + 1}`,
+      severity: 'error',
+    });
+  });
+
+  return errors;
+}
+
+// Unified invoice format for processing
+export interface UnifiedInvoice {
+  invoice_number: string;
+  invoice_date: string;
+  gstin: string;
+  taxable_value: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  place_of_supply: string;
+  invoice_type: string;
+  customer_name?: string;
+  hsn_code?: string;
+  total_amount?: number;
+}
+
+export function convertToUnifiedFormat(invoice: Invoice): UnifiedInvoice {
+  const type = determineInvoiceType(
+    invoice.customer_gstin,
+    invoice.place_of_supply,
+    '29', // Default state code
+    invoice.taxable_value || 0
+  );
+
+  return {
+    invoice_number: invoice.invoice_number || '',
+    invoice_date: invoice.invoice_date ? new Date(invoice.invoice_date).toISOString().split('T')[0] : '',
+    gstin: invoice.customer_gstin || '',
+    taxable_value: invoice.taxable_value || 0,
+    cgst: invoice.cgst_amount || 0,
+    sgst: invoice.sgst_amount || 0,
+    igst: invoice.igst_amount || 0,
+    place_of_supply: invoice.place_of_supply || '',
+    invoice_type: type,
+    total_amount: invoice.total_amount,
+  };
 }

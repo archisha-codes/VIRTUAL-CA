@@ -1,27 +1,37 @@
 /**
- * Upload Page - Backend Integration
+ * Upload Page - Document Upload with Sales/Purchases tabs
  * 
- * This page handles Excel file uploads and sends them to the backend API
- * for GSTR-1 processing instead of processing locally and storing in Supabase.
+ * Supports ClearTax and Government Excel templates for GST data upload.
  */
 
 import { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Upload, FileSpreadsheet, X, CheckCircle, AlertCircle, ShoppingCart, Receipt } from 'lucide-react';
+import { 
+  Upload as UploadIcon, 
+  FileSpreadsheet, 
+  X, 
+  CheckCircle, 
+  AlertCircle, 
+  ShoppingCart, 
+  Receipt,
+  FileDown,
+  AlertTriangle,
+  Info,
+  Loader2,
+  Table
+} from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
+import { Table as TableComponent, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Loader2 } from 'lucide-react';
 import { 
   parseExcelFile, 
   autoMapColumns, 
-  mapRowToInvoice,
   FIELD_LABELS, 
   REQUIRED_FIELDS,
   PURCHASE_FIELD_LABELS,
@@ -33,6 +43,45 @@ import { getExcelColumns, processGSTR1Excel, type GSTR1ProcessResponse } from '@
 
 type InvoiceCategory = 'sales' | 'purchase';
 
+// Template types
+type TemplateType = 'cleartax' | 'government' | 'unknown';
+
+interface TemplateInfo {
+  type: TemplateType;
+  name: string;
+  description: string;
+  sheets: string[];
+}
+
+// Sales templates
+const salesTemplates = [
+  {
+    type: 'cleartax' as TemplateType,
+    name: 'SalesInvoicesAndCreditOrDebitNotes_V11',
+    description: 'ClearTax template - combines all GSTR-1 tables in one workbook',
+    sheets: ['B2B', 'B2CL', 'B2CS', 'CDNR', 'CDNUR', 'EXP', 'HSN', 'DOCS'],
+    downloadUrl: '/SalesInvoicesAndCreditOrDebitNotes_V11.xlsx'
+  },
+  {
+    type: 'government' as TemplateType,
+    name: 'GSTR1_Excel_Workbook_Template_V_3_4_CT',
+    description: 'Government GST portal template',
+    sheets: ['B2B', 'B2CL', 'B2CS', 'CDNR', 'CDNUR', 'EXP', 'HSN', 'DOCS'],
+    downloadUrl: '/GSTR1_Excel_Workbook_Template_V_3_4_CT.xlsx'
+  }
+];
+
+// Purchase templates
+const purchaseTemplates = [
+  {
+    type: 'cleartax' as TemplateType,
+    name: 'PurchaseInvoices',
+    description: 'ClearTax template for purchase invoices',
+    sheets: ['B2B', 'B2CL', 'B2CS', 'CDNR'],
+    downloadUrl: '#'
+  }
+];
+
 export default function UploadPage() {
   const [invoiceCategory, setInvoiceCategory] = useState<InvoiceCategory>('sales');
   const [file, setFile] = useState<File | null>(null);
@@ -41,6 +90,8 @@ export default function UploadPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [step, setStep] = useState<'upload' | 'mapping' | 'processing' | 'result'>('upload');
   const [uploadResult, setUploadResult] = useState<GSTR1ProcessResponse | null>(null);
+  const [templateInfo, setTemplateInfo] = useState<TemplateInfo | null>(null);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const { user } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -61,16 +112,54 @@ export default function UploadPage() {
     }
   }, []);
 
+  // Detect template type from file
+  const detectTemplate = (data: ParsedExcel): TemplateInfo => {
+    // Check for known sheet names to determine template type
+    const sheets = data.sheetNames.map(s => s.toLowerCase());
+    
+    // ClearTax templates typically have specific sheets
+    if (sheets.includes('b2b') && sheets.includes('cdnr')) {
+      return {
+        type: 'cleartax',
+        name: 'ClearTax Template',
+        description: 'ClearTax format detected',
+        sheets: data.sheetNames
+      };
+    }
+    
+    // Government templates
+    if (sheets.includes('b2b') || sheets.includes('b2cl')) {
+      return {
+        type: 'government',
+        name: 'Government Template',
+        description: 'GST Portal format detected',
+        sheets: data.sheetNames
+      };
+    }
+    
+    return {
+      type: 'unknown',
+      name: 'Unknown Format',
+      description: 'Could not determine template type',
+      sheets: data.sheetNames
+    };
+  };
+
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const uploadedFile = acceptedFiles[0];
     if (!uploadedFile) return;
 
     setFile(uploadedFile);
     setIsProcessing(true);
+    setValidationErrors([]);
 
     try {
       const parsed = await parseExcelFile(uploadedFile);
       setParsedData(parsed);
+      
+      // Detect template type
+      const template = detectTemplate(parsed);
+      setTemplateInfo(template);
       
       // Auto-map columns
       const autoMapping = autoMapColumns(parsed.headers);
@@ -79,7 +168,7 @@ export default function UploadPage() {
       setStep('mapping');
       toast({
         title: 'File parsed successfully',
-        description: `Found ${parsed.rows.length} rows and ${parsed.headers.length} columns.`,
+        description: `Found ${parsed.rows.length} rows, ${parsed.headers.length} columns. Template: ${template.name}`,
       });
     } catch (error) {
       toast({
@@ -175,6 +264,8 @@ export default function UploadPage() {
     setColumnMapping({});
     setStep('upload');
     setUploadResult(null);
+    setTemplateInfo(null);
+    setValidationErrors([]);
   };
 
   const handleViewGSTR1 = () => {
@@ -185,19 +276,33 @@ export default function UploadPage() {
     navigate('/gstr3b', { state: { uploadResult } });
   };
 
+  // Preview data for validation
+  const previewData = parsedData?.rows.slice(0, 5).map(row => {
+    const mapped: Record<string, string> = {};
+    Object.entries(columnMapping).forEach(([key, colName]) => {
+      if (colName && parsedData) {
+        const colIndex = parsedData.headers.indexOf(colName);
+        if (colIndex >= 0) {
+          mapped[key] = row[colIndex]?.toString() || '';
+        }
+      }
+    });
+    return mapped;
+  });
+
   return (
-    <DashboardLayout title="Upload & Mapping">
+    <DashboardLayout title="Document Upload">
       <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
         {/* Upload Step */}
         {step === 'upload' && (
           <Card className="shadow-card">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Upload className="h-5 w-5 text-primary" />
+                <UploadIcon className="h-5 w-5 text-primary" />
                 Upload Invoice Data
               </CardTitle>
               <CardDescription>
-                Upload your Excel file containing invoice data. We support .xlsx and .xls formats.
+                Upload your Excel file containing invoice data. We support ClearTax and Government templates.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -206,24 +311,75 @@ export default function UploadPage() {
                 <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="sales" className="flex items-center gap-2">
                     <Receipt className="h-4 w-4" />
-                    Sales Invoices
+                    Sales
                   </TabsTrigger>
                   <TabsTrigger value="purchase" className="flex items-center gap-2">
                     <ShoppingCart className="h-4 w-4" />
-                    Purchase Invoices
+                    Purchases
                   </TabsTrigger>
                 </TabsList>
                 <TabsContent value="sales" className="mt-4">
-                  <p className="text-sm text-muted-foreground">
-                    Upload sales invoices to generate GSTR-1 and calculate outward tax liability for GSTR-3B.
-                  </p>
+                  <div className="space-y-4">
+                    <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                      <h4 className="font-medium text-blue-900 mb-2">Supported Sales Templates</h4>
+                      <ul className="space-y-2 text-sm text-blue-800">
+                        <li className="flex items-start gap-2">
+                          <CheckCircle className="h-4 w-4 mt-0.5 text-blue-600" />
+                          <span><strong>ClearTax Template:</strong> SalesInvoicesAndCreditOrDebitNotes_V11.xlsx</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <CheckCircle className="h-4 w-4 mt-0.5 text-blue-600" />
+                          <span><strong>Government Template:</strong> GSTR1_Excel_Workbook_Template_V_3_4_CT.xlsx</span>
+                        </li>
+                      </ul>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Upload sales invoices to generate GSTR-1 and calculate outward tax liability for GSTR-3B.
+                    </p>
+                  </div>
                 </TabsContent>
                 <TabsContent value="purchase" className="mt-4">
-                  <p className="text-sm text-muted-foreground">
-                    Upload purchase invoices to calculate Input Tax Credit (ITC) for GSTR-3B Section 4.
-                  </p>
+                  <div className="space-y-4">
+                    <div className="p-4 bg-green-50 rounded-lg border border-green-200">
+                      <h4 className="font-medium text-green-900 mb-2">Supported Purchase Templates</h4>
+                      <ul className="space-y-2 text-sm text-green-800">
+                        <li className="flex items-start gap-2">
+                          <CheckCircle className="h-4 w-4 mt-0.5 text-green-600" />
+                          <span><strong>ClearTax Template:</strong> Purchase invoices with GSTIN details</span>
+                        </li>
+                      </ul>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Upload purchase invoices to calculate Input Tax Credit (ITC) for GSTR-3B Section 4.
+                    </p>
+                  </div>
                 </TabsContent>
               </Tabs>
+
+              {/* Template Download Links */}
+              <div className="flex flex-wrap gap-3">
+                {invoiceCategory === 'sales' ? (
+                  <>
+                    <Button variant="outline" size="sm" asChild>
+                      <a href="/SalesInvoicesAndCreditOrDebitNotes_V11.xlsx" download>
+                        <FileDown className="h-4 w-4 mr-2" />
+                        Download ClearTax Template
+                      </a>
+                    </Button>
+                    <Button variant="outline" size="sm" asChild>
+                      <a href="/GSTR1_Excel_Workbook_Template_V_3_4_CT.xlsx" download>
+                        <FileDown className="h-4 w-4 mr-2" />
+                        Download Government Template
+                      </a>
+                    </Button>
+                  </>
+                ) : (
+                  <Button variant="outline" size="sm" disabled>
+                    <FileDown className="h-4 w-4 mr-2" />
+                    Download Purchase Template (Coming Soon)
+                  </Button>
+                )}
+              </div>
 
               {/* Dropzone */}
               <div
@@ -259,6 +415,27 @@ export default function UploadPage() {
                   </div>
                 )}
               </div>
+
+              {/* Template Info */}
+              {templateInfo && (
+                <div className="p-4 bg-muted rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Info className="h-4 w-4" />
+                    <span className="font-medium">Template Detected: {templateInfo.name}</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{templateInfo.description}</p>
+                  {templateInfo.sheets.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {templateInfo.sheets.slice(0, 6).map((sheet, idx) => (
+                        <Badge key={idx} variant="outline">{sheet}</Badge>
+                      ))}
+                      {templateInfo.sheets.length > 6 && (
+                        <Badge variant="outline">+{templateInfo.sheets.length - 6} more</Badge>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -275,6 +452,9 @@ export default function UploadPage() {
                     <Badge variant={invoiceCategory === 'sales' ? 'default' : 'secondary'}>
                       {invoiceCategory === 'sales' ? 'Sales' : 'Purchase'}
                     </Badge>
+                    {templateInfo && (
+                      <Badge variant="outline">{templateInfo.type}</Badge>
+                    )}
                   </CardTitle>
                   <CardDescription>
                     {parsedData.rows.length} rows • {parsedData.headers.length} columns
@@ -285,6 +465,45 @@ export default function UploadPage() {
                 </Button>
               </CardHeader>
             </Card>
+
+            {/* Preview Table */}
+            {previewData && previewData.length > 0 && (
+              <Card className="shadow-card">
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Table className="h-5 w-5" />
+                    Data Preview
+                  </CardTitle>
+                  <CardDescription>
+                    First 5 rows of your uploaded data
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-x-auto">
+                    <TableComponent>
+                      <TableHeader>
+                        <TableRow>
+                          {requiredFields.map(field => (
+                            <TableHead key={field}>{fieldLabels[field]}</TableHead>
+                          ))}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {previewData.map((row, idx) => (
+                          <TableRow key={idx}>
+                            {requiredFields.map(field => (
+                              <TableCell key={field} className="max-w-[200px] truncate">
+                                {row[field] || '-'}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </TableComponent>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             <Card className="shadow-card">
               <CardHeader>
@@ -303,34 +522,49 @@ export default function UploadPage() {
                           <span className="text-destructive">*</span>
                         )}
                         {columnMapping[field] && (
-                          <CheckCircle className="h-3 w-3 text-success ml-1" />
+                          <CheckCircle className="h-3 w-3 text-green-500 ml-1" />
                         )}
                       </label>
-                      <Select
-                        value={columnMapping[field] || 'none'}
-                        onValueChange={(value) => handleMappingChange(field, value)}
+                      <select
+                        value={columnMapping[field] || ''}
+                        onChange={(e) => handleMappingChange(field, e.target.value)}
+                        className={`w-full h-10 px-3 rounded-md border ${
+                          !columnMapping[field] && requiredFields.includes(field) 
+                            ? 'border-red-300 bg-red-50' 
+                            : 'border-input bg-background'
+                        }`}
                       >
-                        <SelectTrigger className={!columnMapping[field] && requiredFields.includes(field) ? 'border-destructive/50' : ''}>
-                          <SelectValue placeholder="Select column" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">-- Not mapped --</SelectItem>
-                          {parsedData.headers.filter(h => h && h.trim()).map((header) => (
-                            <SelectItem key={header} value={header}>
-                              {header}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                        <option value="">-- Not mapped --</option>
+                        {parsedData.headers.filter(h => h && h.trim()).map((header) => (
+                          <option key={header} value={header}>
+                            {header}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   ))}
                 </div>
+
+                {/* Validation Errors */}
+                {validationErrors.length > 0 && (
+                  <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <AlertTriangle className="h-4 w-4 text-red-600" />
+                      <span className="font-medium text-red-800">Validation Errors</span>
+                    </div>
+                    <ul className="space-y-1">
+                      {validationErrors.map((error, idx) => (
+                        <li key={idx} className="text-sm text-red-700">{error}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
                 <div className="mt-6 flex items-center justify-between">
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     {!isMappingComplete && (
                       <>
-                        <AlertCircle className="h-4 w-4 text-warning" />
+                        <AlertCircle className="h-4 w-4 text-amber-500" />
                         Please map all required fields
                       </>
                     )}
@@ -370,7 +604,7 @@ export default function UploadPage() {
           <Card className="shadow-card">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <CheckCircle className="h-5 w-5 text-success" />
+                <CheckCircle className="h-5 w-5 text-green-500" />
                 Upload Complete
               </CardTitle>
               <CardDescription>
@@ -400,9 +634,9 @@ export default function UploadPage() {
 
               {/* Validation Errors */}
               {uploadResult.validation_report?.errors && uploadResult.validation_report.errors.length > 0 && (
-                <div className="p-4 border border-warning rounded-lg bg-warning/10">
+                <div className="p-4 border border-amber-300 rounded-lg bg-amber-50">
                   <div className="flex items-center gap-2 mb-2">
-                    <AlertCircle className="h-5 w-5 text-warning" />
+                    <AlertTriangle className="h-5 w-5 text-amber-600" />
                     <p className="font-medium">Validation Errors ({uploadResult.validation_report.errors.length})</p>
                   </div>
                   <div className="max-h-40 overflow-y-auto">

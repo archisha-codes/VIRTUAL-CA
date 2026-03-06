@@ -224,12 +224,12 @@ export function ExportButtons({ data, gstin = '', period = '', disabled = false,
     exportErrorsMutation.mutate();
   };
 
-  const hasData = data && (
-    data.summary.totalB2BInvoices + 
-    data.summary.totalB2CLInvoices + 
-    data.summary.totalB2CSRecords +
-    data.summary.totalExportInvoices +
-    data.summary.totalCDNRNotes > 0
+  const hasData = data && data.summary && (
+    (data.summary.totalB2BInvoices || 0) + 
+    (data.summary.totalB2CLInvoices || 0) + 
+    (data.summary.totalB2CSRecords || 0) +
+    (data.summary.totalExportInvoices || 0) +
+    (data.summary.totalCDNRNotes || 0) > 0
   );
 
   return (

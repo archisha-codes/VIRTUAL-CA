@@ -10,6 +10,132 @@ export interface ParsedExcel {
   sheetNames: string[];
 }
 
+// Chunk processing configuration
+export const CHUNK_SIZE = 1000;
+
+// Progress callback type
+export type ProgressCallback = (processed: number, total: number) => void;
+
+// Process large Excel files in chunks for better performance
+export async function processLargeExcelFile(
+  file: File,
+  onProgress?: ProgressCallback
+): Promise<ParsedExcel> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = async (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array', cellDates: true });
+
+        const sheetNames = workbook.SheetNames;
+        const firstSheet = workbook.Sheets[sheetNames[0]];
+
+        // Get range and headers
+        const range = XLSX.utils.decode_range(firstSheet['!ref'] || 'A1');
+        const headers: string[] = [];
+
+        for (let col = range.s.c; col <= range.e.c; col++) {
+          const cellAddress = XLSX.utils.encode_cell({ r: range.s.r, c: col });
+          const cell = firstSheet[cellAddress];
+          headers.push(cell ? String(cell.v) : `Column ${col + 1}`);
+        }
+
+        // Get total rows (excluding header)
+        const totalRows = range.e.r;
+
+        // Process in chunks
+        const allRows: ExcelRow[] = [];
+        
+        for (let startRow = 1; startRow <= range.e.r; startRow += CHUNK_SIZE) {
+          const endRow = Math.min(startRow + CHUNK_SIZE - 1, range.e.r);
+          
+          // Create a temporary range for this chunk
+          const chunkRange = {
+            s: { r: startRow, c: range.s.c },
+            e: { r: endRow, c: range.e.c }
+          };
+          
+          // Create a new sheet with just this chunk
+          const chunkSheet = XLSX.utils.aoa_to_sheet([]);
+          
+          // Copy data row by row
+          for (let r = startRow; r <= endRow; r++) {
+            const rowData: (string | number | null)[] = [];
+            for (let c = range.s.c; c <= range.e.c; c++) {
+              const cellAddress = XLSX.utils.encode_cell({ r, c });
+              const cell = firstSheet[cellAddress];
+              rowData.push(cell ? cell.v : null);
+            }
+            XLSX.utils.sheet_add_aoa(chunkSheet, [rowData], { origin: r - startRow });
+          }
+          
+          // Add header row to chunk
+          XLSX.utils.sheet_add_aoa(chunkSheet, [headers], { origin: -1 });
+          
+          // Parse chunk
+          const chunkData = XLSX.utils.sheet_to_json<ExcelRow>(chunkSheet, {
+            raw: false,
+            dateNF: 'yyyy-mm-dd',
+          });
+          
+          allRows.push(...chunkData);
+          
+          // Report progress
+          if (onProgress) {
+            onProgress(allRows.length, totalRows);
+          }
+          
+          // Allow UI to update (yield to event loop)
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
+        resolve({
+          headers,
+          rows: allRows,
+          sheetNames,
+        });
+      } catch (error) {
+        reject(new Error('Failed to process Excel file. Please ensure it is a valid .xlsx or .xls file.'));
+      }
+    };
+
+    reader.onerror = () => {
+      reject(new Error('Failed to read file'));
+    };
+
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// Process invoices in chunks for large datasets
+export async function processInvoicesChunked(
+  rows: ExcelRow[],
+  mapping: ColumnMapping,
+  onProgress?: ProgressCallback
+): Promise<ReturnType<typeof mapRowToInvoice>[]> {
+  const results: ReturnType<typeof mapRowToInvoice>[] = [];
+  const total = rows.length;
+
+  for (let i = 0; i < total; i += CHUNK_SIZE) {
+    const chunk = rows.slice(i, i + CHUNK_SIZE);
+    
+    for (const row of chunk) {
+      results.push(mapRowToInvoice(row, mapping));
+    }
+
+    if (onProgress) {
+      onProgress(i + chunk.length, total);
+    }
+
+    // Yield to event loop for UI updates
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+
+  return results;
+}
+
 export interface ColumnMapping {
   invoice_number: string;
   invoice_date: string;

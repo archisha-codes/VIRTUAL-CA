@@ -330,10 +330,10 @@ def calculate_nil_exempt_supplies(gstr1_tables: Dict[str, Any]) -> Dict[str, flo
     
     These are invoices with 0% rate or no tax.
     """
-    nil_rated = 0.0
-    exempted = 0.0
-    non_gst = 0.0
-    zero_rated = 0.0
+    nil_rated = Decimal('0')
+    exempted = Decimal('0')
+    non_gst = Decimal('0')
+    zero_rated = Decimal('0')
     
     # Process B2B invoices
     for gstin_entry in gstr1_tables.get("b2b", []):
@@ -366,10 +366,10 @@ def calculate_nil_exempt_supplies(gstr1_tables: Dict[str, Any]) -> Dict[str, flo
                     zero_rated += txval
     
     return {
-        "nil_rated": round(nil_rated, 2),
-        "exempted": round(exempted, 2),
-        "non_gst": round(non_gst, 2),
-        "zero_rated": round(zero_rated, 2),
+        "nil_rated": float(round(nil_rated, 2)),
+        "exempted": float(round(exempted, 2)),
+        "non_gst": float(round(non_gst, 2)),
+        "zero_rated": float(round(zero_rated, 2)),
     }
 
 

@@ -45,15 +45,74 @@ export default function InvoicesPage() {
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const { user } = useAuth();
+  const { user, isDemoMode } = useAuth();
 
   useEffect(() => {
-    if (user) {
+    if (user || isDemoMode) {
       fetchInvoices();
     }
-  }, [user]);
+  }, [user, isDemoMode]);
 
   const fetchInvoices = async () => {
+    // If in demo mode, show demo data
+    if (isDemoMode) {
+      setLoading(true);
+      // Demo data
+      const demoInvoices: Invoice[] = [
+        {
+          id: '1',
+          invoice_number: 'INV-2026-001',
+          invoice_date: '2026-03-01',
+          customer_name: 'ABC Corporation',
+          customer_gstin: '29ABCDE1234F1Z5',
+          place_of_supply: '29-Karnataka',
+          taxable_value: 100000,
+          cgst_amount: 9000,
+          sgst_amount: 9000,
+          igst_amount: 0,
+          total_amount: 118000,
+          invoice_type: 'B2B',
+          validation_status: 'passed',
+          validation_errors: [],
+        },
+        {
+          id: '2',
+          invoice_number: 'INV-2026-002',
+          invoice_date: '2026-03-02',
+          customer_name: 'XYZ Traders',
+          customer_gstin: '27XYZAB5678G1Z6',
+          place_of_supply: '27-Maharashtra',
+          taxable_value: 50000,
+          cgst_amount: 0,
+          sgst_amount: 0,
+          igst_amount: 9000,
+          total_amount: 59000,
+          invoice_type: 'B2B',
+          validation_status: 'passed',
+          validation_errors: [],
+        },
+        {
+          id: '3',
+          invoice_number: 'INV-2026-003',
+          invoice_date: '2026-03-03',
+          customer_name: 'Retail Shop',
+          customer_gstin: '',
+          place_of_supply: '29-Karnataka',
+          taxable_value: 25000,
+          cgst_amount: 2250,
+          sgst_amount: 2250,
+          igst_amount: 0,
+          total_amount: 29500,
+          invoice_type: 'B2CS',
+          validation_status: 'warning',
+          validation_errors: [{ field: 'customer_gstin', message: 'GSTIN not provided for B2CS', severity: 'warning' }],
+        },
+      ];
+      setInvoices(demoInvoices);
+      setLoading(false);
+      return;
+    }
+
     if (!user) return;
 
     setLoading(true);

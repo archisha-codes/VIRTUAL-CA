@@ -115,7 +115,18 @@
 
 @layer utilities {
   .gradient-primary {
-    background: linear-gradient(135deg, hsl(217 91% 45%) 0%, hsl(217 91% 60%) 100%);
+    background: linear-gradient(135deg, #556B2F 0%, #800020 100%);
+  }
+  
+  .gradient-olive-burgundy {
+    background: linear-gradient(135deg, #556B2F 0%, #800020 100%);
+  }
+  
+  .text-gradient-olive-burgundy {
+    background: linear-gradient(135deg, #556B2F 0%, #800020 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
   
   .shadow-card {
@@ -142,5 +153,48 @@
   
   button:hover {
     background-color: #173a5e;
+  }
+  
+  /* Vertical News Slider Animation */
+  .vertical-news-slider {
+    animation: verticalScroll 20s linear infinite;
+  }
+  
+  .vertical-news-slider:hover {
+    animation-play-state: paused;
+  }
+  
+  @keyframes verticalScroll {
+    0% {
+      transform: translateY(0);
+    }
+    100% {
+      transform: translateY(-50%);
+    }
+  }
+  
+  /* Glassmorphism styles */
+  .glass {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+  
+  .glass-dark {
+    background: rgba(15, 23, 42, 0.1);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .glass-card {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  }
+  
+  .glass-card:hover {
+    background: rgba(255, 255, 255, 0.85);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
   }
 }

@@ -1,4 +1,5 @@
-import { Upload, FileText, BarChart3, FileDown, Settings, LogOut, ShoppingCart } from 'lucide-react';
+import { useState } from 'react';
+import { Upload, FileText, BarChart3, FileDown, Settings, LogOut, ShoppingCart, Calculator, FolderOpen, ArrowRightLeft, FileCheck, Files, FileBarChart, Receipt, BookOpen } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -14,57 +15,261 @@ import {
   SidebarHeader,
 } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
+// Main navigation items - reorganized for GST SaaS structure
 const mainNavItems = [
-  { title: 'Upload & Mapping', url: '/upload', icon: Upload },
-  { title: 'Sales Invoices', url: '/invoices', icon: FileText },
+  { title: 'Dashboard', url: '/dashboard', icon: FolderOpen },
+];
+
+// Filing section
+const filingNavItems = [
+  { title: 'GSTR-1', url: '/gstr1', icon: FileText },
+  { title: 'GSTR-3B', url: '/gstr3b', icon: Calculator },
+  { title: 'GSTR-2B', url: '/gstr2b', icon: FileCheck },
+];
+
+// IMS section
+const imsNavItems = [
+  { title: 'Inward Supplies', url: '/ims/inward', icon: ArrowRightLeft },
+  { title: 'Outward Supplies', url: '/ims/outward', icon: ArrowRightLeft },
+];
+
+// ITC section
+const itcNavItems = [
+  { title: 'Credit Ledger', url: '/itc/ledger', icon: Files },
+  { title: 'GSTR-2B', url: '/gstr2b', icon: FileCheck },
+];
+
+// Upload section
+const uploadNavItems = [
+  { title: 'Sales Invoices', url: '/invoices', icon: Receipt },
   { title: 'Purchase Invoices', url: '/purchase-invoices', icon: ShoppingCart },
-  { title: 'GSTR-1 Tables', url: '/gstr1', icon: BarChart3 },
-  { title: 'GSTR-3B Summary', url: '/gstr3b', icon: BarChart3 },
-  { title: 'Downloads', url: '/downloads', icon: FileDown },
+];
+
+// Reports section
+const reportsNavItems = [
+  { title: 'Filing Tracker', url: '/reports/filing', icon: BarChart3 },
+  { title: 'GST Reports', url: '/reports/gst', icon: FileBarChart },
 ];
 
 export function AppSidebar() {
   const { signOut, profile } = useAuth();
+  const [filingOpen, setFilingOpen] = useState(true);
+  const [imsOpen, setImsOpen] = useState(true);
+  const [itcOpen, setItcOpen] = useState(true);
+  const [uploadOpen, setUploadOpen] = useState(true);
+  const [reportsOpen, setReportsOpen] = useState(true);
 
   return (
     <Sidebar className="border-r border-sidebar-border">
       <SidebarHeader className="p-4 border-b border-sidebar-border">
         <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-lg gradient-primary flex items-center justify-center">
-            <span className="text-lg font-bold text-sidebar-primary-foreground">G</span>
+          <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-olive-600 to-burgundy-700 flex items-center justify-center">
+            <span className="text-lg font-bold text-white">V</span>
           </div>
           <div className="flex flex-col">
-            <span className="font-semibold text-sidebar-foreground">GST Comply</span>
-            <span className="text-xs text-sidebar-foreground/60">Automation Tool</span>
+            <span className="font-semibold text-sidebar-foreground">Virtual CA</span>
+            <span className="text-xs text-sidebar-foreground/60">GST Compliance</span>
           </div>
         </div>
       </SidebarHeader>
 
       <SidebarContent className="px-2">
+        {/* Dashboard */}
         <SidebarGroup>
-          <SidebarGroupLabel className="text-sidebar-foreground/50 text-xs uppercase tracking-wider px-3 py-2">
-            Main Menu
-          </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {mainNavItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild>
-                    <NavLink 
-                      to={item.url} 
-                      className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
-                      activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
-                    >
-                      <item.icon className="h-5 w-5" />
-                      <span>{item.title}</span>
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <NavLink 
+                    to="/dashboard" 
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                  >
+                    <FolderOpen className="h-5 w-5" />
+                    <span>Dashboard</span>
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {/* Filing Section */}
+        <Collapsible open={filingOpen} onOpenChange={setFilingOpen} className="mt-2">
+          <SidebarGroup>
+            <CollapsibleTrigger className="flex items-center w-full px-3 py-2 text-sidebar-foreground/50 text-xs uppercase tracking-wider hover:text-sidebar-foreground/70">
+              {filingOpen ? <ChevronDown className="h-4 w-4 mr-1" /> : <ChevronRight className="h-4 w-4 mr-1" />}
+              Filing
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {filingNavItems.map((item) => (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton asChild>
+                        <NavLink 
+                          to={item.url} 
+                          className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                          activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                        >
+                          <item.icon className="h-5 w-5" />
+                          <span>{item.title}</span>
+                        </NavLink>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </CollapsibleContent>
+          </SidebarGroup>
+        </Collapsible>
+
+        {/* IMS Section */}
+        <Collapsible open={imsOpen} onOpenChange={setImsOpen} className="mt-2">
+          <SidebarGroup>
+            <CollapsibleTrigger className="flex items-center w-full px-3 py-2 text-sidebar-foreground/50 text-xs uppercase tracking-wider hover:text-sidebar-foreground/70">
+              {imsOpen ? <ChevronDown className="h-4 w-4 mr-1" /> : <ChevronRight className="h-4 w-4 mr-1" />}
+              IMS
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {imsNavItems.map((item) => (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton asChild>
+                        <NavLink 
+                          to={item.url} 
+                          className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                          activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                        >
+                          <item.icon className="h-5 w-5" />
+                          <span>{item.title}</span>
+                        </NavLink>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </CollapsibleContent>
+          </SidebarGroup>
+        </Collapsible>
+
+        {/* ITC Section */}
+        <Collapsible open={itcOpen} onOpenChange={setItcOpen} className="mt-2">
+          <SidebarGroup>
+            <CollapsibleTrigger className="flex items-center w-full px-3 py-2 text-sidebar-foreground/50 text-xs uppercase tracking-wider hover:text-sidebar-foreground/70">
+              {itcOpen ? <ChevronDown className="h-4 w-4 mr-1" /> : <ChevronRight className="h-4 w-4 mr-1" />}
+              ITC
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {itcNavItems.map((item) => (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton asChild>
+                        <NavLink 
+                          to={item.url} 
+                          className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                          activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                        >
+                          <item.icon className="h-5 w-5" />
+                          <span>{item.title}</span>
+                        </NavLink>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </CollapsibleContent>
+          </SidebarGroup>
+        </Collapsible>
+
+        {/* Upload Section */}
+        <Collapsible open={uploadOpen} onOpenChange={setUploadOpen} className="mt-2">
+          <SidebarGroup>
+            <CollapsibleTrigger className="flex items-center w-full px-3 py-2 text-sidebar-foreground/50 text-xs uppercase tracking-wider hover:text-sidebar-foreground/70">
+              {uploadOpen ? <ChevronDown className="h-4 w-4 mr-1" /> : <ChevronRight className="h-4 w-4 mr-1" />}
+              Upload
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {uploadNavItems.map((item) => (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton asChild>
+                        <NavLink 
+                          to={item.url} 
+                          className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                          activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                        >
+                          <item.icon className="h-5 w-5" />
+                          <span>{item.title}</span>
+                        </NavLink>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild>
+                      <NavLink 
+                        to="/upload" 
+                        className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                        activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                      >
+                        <Upload className="h-5 w-5" />
+                        <span>Upload Data</span>
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </CollapsibleContent>
+          </SidebarGroup>
+        </Collapsible>
+
+        {/* Reports Section */}
+        <Collapsible open={reportsOpen} onOpenChange={setReportsOpen} className="mt-2">
+          <SidebarGroup>
+            <CollapsibleTrigger className="flex items-center w-full px-3 py-2 text-sidebar-foreground/50 text-xs uppercase tracking-wider hover:text-sidebar-foreground/70">
+              {reportsOpen ? <ChevronDown className="h-4 w-4 mr-1" /> : <ChevronRight className="h-4 w-4 mr-1" />}
+              Reports
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {reportsNavItems.map((item) => (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton asChild>
+                        <NavLink 
+                          to={item.url} 
+                          className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                          activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                        >
+                          <item.icon className="h-5 w-5" />
+                          <span>{item.title}</span>
+                        </NavLink>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild>
+                      <NavLink 
+                        to="/downloads" 
+                        className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                        activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                      >
+                        <FileDown className="h-5 w-5" />
+                        <span>Downloads</span>
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </CollapsibleContent>
+          </SidebarGroup>
+        </Collapsible>
 
         <SidebarGroup className="mt-auto">
           <SidebarGroupLabel className="text-sidebar-foreground/50 text-xs uppercase tracking-wider px-3 py-2">
@@ -72,6 +277,18 @@ export function AppSidebar() {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <NavLink 
+                    to="/docs" 
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                  >
+                    <BookOpen className="h-5 w-5" />
+                    <span>Docs & Guide</span>
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild>
                   <NavLink 

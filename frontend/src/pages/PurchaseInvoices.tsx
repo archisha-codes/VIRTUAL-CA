@@ -43,15 +43,58 @@ export default function PurchaseInvoicesPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const { user } = useAuth();
+  const { user, isDemoMode } = useAuth();
 
   useEffect(() => {
-    if (user) {
+    if (user || isDemoMode) {
       fetchInvoices();
     }
-  }, [user]);
+  }, [user, isDemoMode]);
 
   const fetchInvoices = async () => {
+    // If in demo mode, show demo data
+    if (isDemoMode) {
+      setLoading(true);
+      // Demo purchase data
+      const demoInvoices: PurchaseInvoice[] = [
+        {
+          id: '1',
+          invoice_number: 'PO-2026-001',
+          invoice_date: '2026-02-15',
+          supplier_name: 'Global Suppliers Ltd',
+          supplier_gstin: '29GLOBALL1234Z1',
+          place_of_supply: '29-Karnataka',
+          taxable_value: 75000,
+          cgst_amount: 6750,
+          sgst_amount: 6750,
+          igst_amount: 0,
+          total_amount: 88500,
+          invoice_type: 'B2B',
+          validation_status: 'passed',
+          validation_errors: [],
+        },
+        {
+          id: '2',
+          invoice_number: 'PO-2026-002',
+          invoice_date: '2026-02-20',
+          supplier_name: 'Import Co',
+          supplier_gstin: '27IMPORTS5678Z2',
+          place_of_supply: '27-Maharashtra',
+          taxable_value: 150000,
+          cgst_amount: 0,
+          sgst_amount: 0,
+          igst_amount: 27000,
+          total_amount: 177000,
+          invoice_type: 'B2B',
+          validation_status: 'passed',
+          validation_errors: [],
+        },
+      ];
+      setInvoices(demoInvoices);
+      setLoading(false);
+      return;
+    }
+
     if (!user) return;
 
     setLoading(true);

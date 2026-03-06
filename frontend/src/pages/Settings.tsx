@@ -20,16 +20,16 @@ const profileSchema = z.object({
 type ProfileFormData = z.infer<typeof profileSchema>;
 
 export default function SettingsPage() {
-  const { profile, updateProfile } = useAuth();
+  const { profile, updateProfile, isDemoMode } = useAuth();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
 
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
     defaultValues: {
-      full_name: profile?.full_name || '',
-      company_name: profile?.company_name || '',
-      gstin: profile?.gstin || '',
+      full_name: profile?.full_name || (isDemoMode ? 'Demo User' : ''),
+      company_name: profile?.company_name || (isDemoMode ? 'Demo Company Pvt Ltd' : ''),
+      gstin: profile?.gstin || (isDemoMode ? '29ABCDE1234F1Z5' : ''),
     },
   });
 

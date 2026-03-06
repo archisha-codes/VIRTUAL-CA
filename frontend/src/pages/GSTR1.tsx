@@ -83,10 +83,10 @@ export default function GSTR1Page() {
       data: tableData as Record<string, unknown>[],
     })) : [];
   
-  // Get summary data
+  // Get summary data with safe access
   const summaryData = gstr1Data?.summary;
 
-  // Prepare data for export (use original transformed data if needed)
+  // Prepare data for export (use original transformed data if needed) - with safe access
   const data = {
     b2b: gstr1Data?.b2b || [],
     b2cl: gstr1Data?.b2cl || [],
@@ -142,7 +142,7 @@ export default function GSTR1Page() {
             {!uploadResult ? (
               <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                 <AlertCircle className="h-12 w-12 mb-4" />
-                <p className="text-lg font-medium">No data available</p>
+                <p className="text-lg font-medium">No invoices uploaded yet</p>
                 <p className="text-sm">Upload an Excel file to generate GSTR-1 tables</p>
                 <Button 
                   variant="outline" 
@@ -178,18 +178,22 @@ export default function GSTR1Page() {
                     </CardHeader>
                     <CardContent>
                       <div className="gstr-summary-grid">
-                        {Object.entries(summaryData).map(([key, value]) => (
-                          <div key={key} className="gstr-summary-item">
-                            <span className="gstr-summary-label">
-                              {key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
-                            </span>
-                            <span className="gstr-summary-value">
-                              {typeof value === 'number' 
-                                ? value.toLocaleString('en-IN') 
-                                : String(value)}
-                            </span>
-                          </div>
-                        ))}
+                        {summaryData && Object.keys(summaryData).length > 0 ? (
+                          Object.entries(summaryData).map(([key, value]) => (
+                            <div key={key} className="gstr-summary-item">
+                              <span className="gstr-summary-label">
+                                {key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+                              </span>
+                              <span className="gstr-summary-value">
+                                {typeof value === 'number' 
+                                  ? value.toLocaleString('en-IN') 
+                                  : String(value ?? '-')}
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-muted-foreground text-center py-4">No summary data available</p>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
