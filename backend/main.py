@@ -264,7 +264,7 @@ class RateLimiter:
             return False, 0
 
 # Create rate limiter instance (60 requests per minute)
-rate_limiter = RateLimiter(requests_per_minute=60)
+rate_limiter = RateLimiter(requests_per_minute=1000)
 
 # ============ Audit Logging ============
 class AuditLogger:
