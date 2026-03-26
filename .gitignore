@@ -5,10 +5,19 @@
 tags
 .vscode/
 __pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+.env
 
-# docs
-india_compliance/docs/current
+# Backend
+backend/__pycache__/
+backend/logs/
+backend/uploads/
+backend/india_compliance/docs/current
 
-# JS
-dist/
-node_modules
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.next/
+frontend/.DS_Store

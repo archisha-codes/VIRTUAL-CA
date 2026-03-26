@@ -18,7 +18,8 @@ import {
   AlertTriangle,
   Info,
   Loader2,
-  Table
+  Table,
+  History
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -40,8 +41,9 @@ import {
   type ParsedExcel 
 } from '@/lib/excel-parser';
 import { getExcelColumns, processGSTR1Excel, type GSTR1ProcessResponse } from '@/lib/api';
+import { UploadHistory } from '@/components/UploadHistory';
 
-type InvoiceCategory = 'sales' | 'purchase';
+type InvoiceCategory = 'sales' | 'purchase' | 'history';
 
 // Template types
 type TemplateType = 'cleartax' | 'government' | 'unknown';
@@ -117,12 +119,22 @@ export default function UploadPage() {
     // Check for known sheet names to determine template type
     const sheets = data.sheetNames.map(s => s.toLowerCase());
     
+    // Detect if this is a sales or purchase template based on sheets
+    const isPurchaseTemplate = sheets.includes('purchases') || 
+                               sheets.includes('purchase_b2b') ||
+                               sheets.includes('vendor');
+    
+    // Auto-switch to appropriate tab if user hasn't manually selected
+    if (isPurchaseTemplate && invoiceCategory === 'sales') {
+      // Don't auto-switch, just mark it
+    }
+    
     // ClearTax templates typically have specific sheets
     if (sheets.includes('b2b') && sheets.includes('cdnr')) {
       return {
         type: 'cleartax',
         name: 'ClearTax Template',
-        description: 'ClearTax format detected',
+        description: isPurchaseTemplate ? 'ClearTax Purchase format detected' : 'ClearTax Sales format detected',
         sheets: data.sheetNames
       };
     }
@@ -145,6 +157,32 @@ export default function UploadPage() {
     };
   };
 
+  // Detect category from file content
+  const detectCategory = (data: ParsedExcel): InvoiceCategory => {
+    const sheets = data.sheetNames.map(s => s.toLowerCase());
+    
+    // Purchase indicators
+    if (sheets.includes('purchases') || 
+        sheets.includes('purchase_b2b') ||
+        sheets.includes('vendor') ||
+        sheets.includes('expenses') ||
+        sheets.includes('itr')) {
+      return 'purchase';
+    }
+    
+    // Sales indicators
+    if (sheets.includes('b2b') || 
+        sheets.includes('b2cl') || 
+        sheets.includes('b2cs') ||
+        sheets.includes('sales') ||
+        sheets.includes('invoices')) {
+      return 'sales';
+    }
+    
+    // Default to sales (most common)
+    return 'sales';
+  };
+
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const uploadedFile = acceptedFiles[0];
     if (!uploadedFile) return;
@@ -157,9 +195,13 @@ export default function UploadPage() {
       const parsed = await parseExcelFile(uploadedFile);
       setParsedData(parsed);
       
-      // Detect template type
+      // Auto-detect template type
       const template = detectTemplate(parsed);
       setTemplateInfo(template);
+      
+      // Auto-detect category (sales vs purchase) and switch tabs
+      const detectedCategory = detectCategory(parsed);
+      setInvoiceCategory(detectedCategory);
       
       // Auto-map columns
       const autoMapping = autoMapColumns(parsed.headers);
@@ -168,7 +210,7 @@ export default function UploadPage() {
       setStep('mapping');
       toast({
         title: 'File parsed successfully',
-        description: `Found ${parsed.rows.length} rows, ${parsed.headers.length} columns. Template: ${template.name}`,
+        description: `Detected ${detectedCategory} data. Found ${parsed.rows.length} rows, ${parsed.headers.length} columns. Template: ${template.name}`,
       });
     } catch (error) {
       toast({
@@ -308,7 +350,7 @@ export default function UploadPage() {
             <CardContent className="space-y-6">
               {/* Invoice Category Tabs */}
               <Tabs value={invoiceCategory} onValueChange={(v) => setInvoiceCategory(v as InvoiceCategory)}>
-                <TabsList className="grid w-full grid-cols-2">
+                <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="sales" className="flex items-center gap-2">
                     <Receipt className="h-4 w-4" />
                     Sales
@@ -316,6 +358,10 @@ export default function UploadPage() {
                   <TabsTrigger value="purchase" className="flex items-center gap-2">
                     <ShoppingCart className="h-4 w-4" />
                     Purchases
+                  </TabsTrigger>
+                  <TabsTrigger value="history" className="flex items-center gap-2">
+                    <History className="h-4 w-4" />
+                    History
                   </TabsTrigger>
                 </TabsList>
                 <TabsContent value="sales" className="mt-4">
@@ -354,6 +400,9 @@ export default function UploadPage() {
                     </p>
                   </div>
                 </TabsContent>
+                <TabsContent value="history" className="mt-4">
+                  <UploadHistory />
+                </TabsContent>
               </Tabs>
 
               {/* Template Download Links */}
@@ -361,13 +410,13 @@ export default function UploadPage() {
                 {invoiceCategory === 'sales' ? (
                   <>
                     <Button variant="outline" size="sm" asChild>
-                      <a href="/SalesInvoicesAndCreditOrDebitNotes_V11.xlsx" download>
+                      <a href="/VirtualCA_Template.xlsx" download>
                         <FileDown className="h-4 w-4 mr-2" />
-                        Download ClearTax Template
+                        Download Virtual CA Template
                       </a>
                     </Button>
                     <Button variant="outline" size="sm" asChild>
-                      <a href="/GSTR1_Excel_Workbook_Template_V_3_4_CT.xlsx" download>
+                      <a href="/Govt_Template.xlsx" download>
                         <FileDown className="h-4 w-4 mr-2" />
                         Download Government Template
                       </a>

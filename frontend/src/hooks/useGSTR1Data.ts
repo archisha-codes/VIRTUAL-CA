@@ -167,7 +167,7 @@ export interface UploadOptions {
 // Transform backend data to frontend-friendly format
 // ============================================
 
-function transformBackendB2BToFrontend(b2b: BackendB2BInvoice[]): B2BCustomer[] {
+export function transformBackendB2BToFrontend(b2b: BackendB2BInvoice[]): B2BCustomer[] {
   // Group B2B invoices by customer GSTIN
   const customerMap = new Map<string, B2BCustomer>();
   
@@ -224,7 +224,7 @@ function transformBackendB2BToFrontend(b2b: BackendB2BInvoice[]): B2BCustomer[] 
   );
 }
 
-function transformBackendB2CLToFrontend(b2cl: BackendB2CLInvoice[]): B2CLInvoice[] {
+export function transformBackendB2CLToFrontend(b2cl: BackendB2CLInvoice[]): B2CLInvoice[] {
   return b2cl.map((invoice) => {
     // Backend returns GSTN format: txval, iamt, camt, samt, csamt, rt
     const firstItem = invoice.items?.[0] || {};
@@ -246,7 +246,7 @@ function transformBackendB2CLToFrontend(b2cl: BackendB2CLInvoice[]): B2CLInvoice
   });
 }
 
-function transformBackendB2CSToFrontend(b2cs: BackendB2CSEntry[]): B2CSSummary[] {
+export function transformBackendB2CSToFrontend(b2cs: BackendB2CSEntry[]): B2CSSummary[] {
   // Group B2CS by place of supply and determine inter/intra state
   const summaryMap = new Map<string, B2CSSummary>();
   
@@ -303,7 +303,7 @@ function transformBackendB2CSToFrontend(b2cs: BackendB2CSEntry[]): B2CSSummary[]
   return Array.from(summaryMap.values());
 }
 
-function transformBackendExportToFrontend(exports: BackendExportInvoice[]): ExportInvoice[] {
+export function transformBackendExportToFrontend(exports: BackendExportInvoice[]): ExportInvoice[] {
   return exports.map((invoice) => {
     // Backend returns GSTN format: txval, iamt, rt
     const firstItem = invoice.items?.[0] || {};
@@ -327,7 +327,7 @@ function transformBackendExportToFrontend(exports: BackendExportInvoice[]): Expo
   });
 }
 
-function transformBackendCDNRToFrontend(cdnr: BackendCDNREntry[]): CDNRCustomer[] {
+export function transformBackendCDNRToFrontend(cdnr: BackendCDNREntry[]): CDNRCustomer[] {
   // Group CDN/R by customer GSTIN
   const customerMap = new Map<string, CDNRCustomer>();
   

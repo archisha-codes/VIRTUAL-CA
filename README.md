@@ -55,7 +55,7 @@ The GSTR processing backend can be run in Docker containers.
 
 ```bash
 # Build the Docker image
-docker build -t virtual-ca .
+docker build -t virtual-ca ./backend
 
 # Run the container
 docker run -p 8000:8000 virtual-ca
@@ -81,10 +81,10 @@ docker-compose up --build
 | `GST_API_KEY` | API key for authentication | `gst-secret-key-change-in-production` |
 | `REACT_APP_API_URL` | Frontend API URL | `http://localhost:8000` |
 
-Create a `.env` file from `.env.example`:
+Create a `.env` file from any example:
 
 ```bash
-cp .env.example .env
+cp backend/.env.example backend/.env
 ```
 
 ### API Endpoints

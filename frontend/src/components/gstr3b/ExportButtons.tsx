@@ -31,24 +31,30 @@ export function ExportButtons({ data, gstin = '', period = '', disabled = false 
   // Export to Excel using backend
   const exportExcelMutation = useMutation({
     mutationFn: async () => {
-      // Try to get GSTR-3B data from localStorage
-      let gstr3bData = null;
-      const stored = localStorage.getItem('gstr3b_data');
-      if (stored) {
-        try {
-          gstr3bData = JSON.parse(stored);
-        } catch (e) {
-          console.error('Failed to parse stored gstr3b_data:', e);
-        }
+      // PRIMARY: Use data prop as source of truth (from backend state)
+      let dataToExport: Record<string, unknown> | null = null;
+      
+      if (data) {
+        // Transform from data prop (canonical source)
+        dataToExport = transformGSTR3BToCleanData(data) as unknown as Record<string, unknown>;
       }
       
-      // If we have stored data, use it; otherwise transform from data prop
-      const dataToExport = gstr3bData || (data ? transformGSTR3BToCleanData(data) : null);
+      // FALLBACK: Only use localStorage cache if data prop is not available
+      if (!dataToExport) {
+        const stored = localStorage.getItem('gstr3b_data');
+        if (stored) {
+          try {
+            dataToExport = JSON.parse(stored);
+          } catch (e) {
+            console.error('Failed to parse stored gstr3b_data:', e);
+          }
+        }
+      }
       
       if (!dataToExport) throw new Error('No data available');
       
       return apiExportGSTR3BExcel(
-        dataToExport as Record<string, unknown>,
+        dataToExport,
         period || '',
         gstin || '',
         ''

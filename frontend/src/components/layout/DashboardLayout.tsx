@@ -2,6 +2,7 @@ import { ReactNode } from 'react';
 import { SidebarProvider } from '@/components/ui/sidebar';
 import { AppSidebar } from './AppSidebar';
 import { AppHeader } from './AppHeader';
+import { SupportChatButton, SupportChatDrawer } from '@/components/support/SupportChatDrawer';
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -20,6 +21,9 @@ export function DashboardLayout({ children, title }: DashboardLayoutProps) {
           </main>
         </div>
       </div>
+      {/* Support Chat - visible on all pages */}
+      <SupportChatButton />
+      <SupportChatDrawer />
     </SidebarProvider>
   );
 }

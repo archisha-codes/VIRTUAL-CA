@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -20,6 +20,7 @@ import {
   Zap,
   Upload
 } from 'lucide-react';
+import { useDashboardService, DashboardData } from '@/services/dashboardService';
 
 interface FilingCardProps {
   title: string;
@@ -123,6 +124,32 @@ function FilingCard({
 export default function Filing() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('overview');
+  const { getDashboardData, getForms } = useDashboardService();
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const data = await getDashboardData();
+      setDashboardData(data);
+    } catch (error) {
+      console.error('Failed to load filing data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Get filing status
+  const filingStatus = dashboardData?.filing_status || {
+    gstr1: { status: 'pending', period: '' },
+    gstr3b: { status: 'pending', period: '' },
+    gstr2b: { status: 'pending', period: '' }
+  };
 
   const gstr1Features = [
     'Monthly or quarterly return for outward supplies',
@@ -176,8 +203,8 @@ export default function Filing() {
                 description="Monthly or quarterly return for outward supplies. Reports all sales transactions to the government."
                 icon={FileText}
                 features={gstr1Features}
-                status="ready"
-                lastUpdated="March 1, 2026"
+                status={filingStatus.gstr1.status === 'filed' ? 'ready' : filingStatus.gstr1.status === 'available' ? 'ready' : 'pending'}
+                lastUpdated={filingStatus.gstr1.filed_date || 'Not filed yet'}
                 actions={[
                   {
                     label: 'Prepare Return',
@@ -205,8 +232,8 @@ export default function Filing() {
                 description="Summary GST return. Consolidates all tax liabilities and Input Tax Credit claims."
                 icon={BarChart3}
                 features={gstr3bFeatures}
-                status="ready"
-                lastUpdated="March 1, 2026"
+                status={filingStatus.gstr3b.status === 'filed' ? 'ready' : filingStatus.gstr3b.status === 'available' ? 'ready' : 'pending'}
+                lastUpdated={filingStatus.gstr3b.filed_date || 'Not filed yet'}
                 actions={[
                   {
                     label: 'Prepare Return',
@@ -231,43 +258,49 @@ export default function Filing() {
 
             {/* Filing Status Summary */}
             <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-100">
+              <Card className={`bg-gradient-to-br ${filingStatus.gstr1.status === 'filed' ? 'from-green-50 to-emerald-50 border-green-100' : filingStatus.gstr1.status === 'available' ? 'from-blue-50 to-indigo-50 border-blue-100' : 'from-yellow-50 to-amber-50 border-yellow-100'}`}>
                 <CardContent className="pt-6">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm text-blue-600 font-medium">GSTR-1 Status</p>
-                      <p className="text-2xl font-bold text-blue-900">Ready to File</p>
+                      <p className={`text-sm font-medium ${filingStatus.gstr1.status === 'filed' ? 'text-green-600' : filingStatus.gstr1.status === 'available' ? 'text-blue-600' : 'text-yellow-600'}`}>GSTR-1 Status</p>
+                      <p className={`text-2xl font-bold ${filingStatus.gstr1.status === 'filed' ? 'text-green-900' : filingStatus.gstr1.status === 'available' ? 'text-blue-900' : 'text-yellow-900'}`}>
+                        {filingStatus.gstr1.status === 'filed' ? 'Filed' : filingStatus.gstr1.status === 'available' ? 'Ready to File' : 'Pending'}
+                      </p>
                     </div>
-                    <div className="h-12 w-12 rounded-full bg-blue-100 flex items-center justify-center">
-                      <CheckCircle className="h-6 w-6 text-blue-600" />
+                    <div className={`h-12 w-12 rounded-full flex items-center justify-center ${filingStatus.gstr1.status === 'filed' ? 'bg-green-100' : filingStatus.gstr1.status === 'available' ? 'bg-blue-100' : 'bg-yellow-100'}`}>
+                      {filingStatus.gstr1.status === 'filed' ? <CheckCircle className="h-6 w-6 text-green-600" /> : filingStatus.gstr1.status === 'available' ? <CheckCircle className="h-6 w-6 text-blue-600" /> : <AlertCircle className="h-6 w-6 text-yellow-600" />}
                     </div>
                   </div>
                 </CardContent>
               </Card>
 
-              <Card className="bg-gradient-to-br from-green-50 to-emerald-50 border-green-100">
+              <Card className={`bg-gradient-to-br ${filingStatus.gstr3b.status === 'filed' ? 'from-green-50 to-emerald-50 border-green-100' : filingStatus.gstr3b.status === 'available' ? 'from-blue-50 to-indigo-50 border-blue-100' : 'from-yellow-50 to-amber-50 border-yellow-100'}`}>
                 <CardContent className="pt-6">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm text-green-600 font-medium">GSTR-3B Status</p>
-                      <p className="text-2xl font-bold text-green-900">Ready to File</p>
+                      <p className={`text-sm font-medium ${filingStatus.gstr3b.status === 'filed' ? 'text-green-600' : filingStatus.gstr3b.status === 'available' ? 'text-blue-600' : 'text-yellow-600'}`}>GSTR-3B Status</p>
+                      <p className={`text-2xl font-bold ${filingStatus.gstr3b.status === 'filed' ? 'text-green-900' : filingStatus.gstr3b.status === 'available' ? 'text-blue-900' : 'text-yellow-900'}`}>
+                        {filingStatus.gstr3b.status === 'filed' ? 'Filed' : filingStatus.gstr3b.status === 'available' ? 'Ready to File' : 'Pending'}
+                      </p>
                     </div>
-                    <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center">
-                      <CheckCircle className="h-6 w-6 text-green-600" />
+                    <div className={`h-12 w-12 rounded-full flex items-center justify-center ${filingStatus.gstr3b.status === 'filed' ? 'bg-green-100' : filingStatus.gstr3b.status === 'available' ? 'bg-blue-100' : 'bg-yellow-100'}`}>
+                      {filingStatus.gstr3b.status === 'filed' ? <CheckCircle className="h-6 w-6 text-green-600" /> : filingStatus.gstr3b.status === 'available' ? <CheckCircle className="h-6 w-6 text-blue-600" /> : <AlertCircle className="h-6 w-6 text-yellow-600" />}
                     </div>
                   </div>
                 </CardContent>
               </Card>
 
-              <Card className="bg-gradient-to-br from-purple-50 to-violet-50 border-purple-100">
+              <Card className={`bg-gradient-to-br ${filingStatus.gstr2b.status === 'available' ? 'from-purple-50 to-violet-50 border-purple-100' : 'from-slate-50 to-gray-50 border-slate-100'}`}>
                 <CardContent className="pt-6">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm text-purple-600 font-medium">GSTR-2B Status</p>
-                      <p className="text-2xl font-bold text-purple-900">Auto Pull</p>
+                      <p className={`text-sm font-medium ${filingStatus.gstr2b.status === 'available' ? 'text-purple-600' : 'text-slate-600'}`}>GSTR-2B Status</p>
+                      <p className={`text-2xl font-bold ${filingStatus.gstr2b.status === 'available' ? 'text-purple-900' : 'text-slate-900'}`}>
+                        {filingStatus.gstr2b.status === 'available' ? 'Auto Pull' : 'Not Available'}
+                      </p>
                     </div>
-                    <div className="h-12 w-12 rounded-full bg-purple-100 flex items-center justify-center">
-                      <Zap className="h-6 w-6 text-purple-600" />
+                    <div className={`h-12 w-12 rounded-full flex items-center justify-center ${filingStatus.gstr2b.status === 'available' ? 'bg-purple-100' : 'bg-slate-100'}`}>
+                      {filingStatus.gstr2b.status === 'available' ? <Zap className="h-6 w-6 text-purple-600" /> : <AlertCircle className="h-6 w-6 text-slate-600" />}
                     </div>
                   </div>
                 </CardContent>
@@ -336,19 +369,19 @@ export default function Filing() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">Return Period</p>
-                    <p className="text-lg font-semibold">February 2026</p>
+                    <p className="text-lg font-semibold">{filingStatus.gstr1.period || 'Not selected'}</p>
                   </div>
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">Total Invoices</p>
-                    <p className="text-lg font-semibold">156</p>
+                    <p className="text-lg font-semibold">{dashboardData?.gstr1_stats?.total_invoices || 0}</p>
                   </div>
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">Taxable Value</p>
-                    <p className="text-lg font-semibold">₹45,23,000</p>
+                    <p className="text-lg font-semibold">₹{dashboardData?.gstr1_stats?.taxable_value?.toLocaleString('en-IN') || '0'}</p>
                   </div>
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">Total Tax</p>
-                    <p className="text-lg font-semibold">₹8,13,540</p>
+                    <p className="text-lg font-semibold">₹{dashboardData?.gstr1_stats?.total_tax?.toLocaleString('en-IN') || '0'}</p>
                   </div>
                 </div>
 
@@ -385,19 +418,19 @@ export default function Filing() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">Return Period</p>
-                    <p className="text-lg font-semibold">February 2026</p>
+                    <p className="text-lg font-semibold">{filingStatus.gstr3b.period || 'Not selected'}</p>
                   </div>
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">Total Liability</p>
-                    <p className="text-lg font-semibold">₹8,13,540</p>
+                    <p className="text-lg font-semibold">₹{dashboardData?.gstr3b_stats?.total_liability?.toLocaleString('en-IN') || '0'}</p>
                   </div>
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">ITC Available</p>
-                    <p className="text-lg font-semibold">₹6,45,230</p>
+                    <p className="text-lg font-semibold">₹{dashboardData?.gstr3b_stats?.itc_available?.toLocaleString('en-IN') || '0'}</p>
                   </div>
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">Net Payable</p>
-                    <p className="text-lg font-semibold text-green-600">₹1,68,310</p>
+                    <p className="text-lg font-semibold text-green-600">₹{dashboardData?.gstr3b_stats?.net_payable?.toLocaleString('en-IN') || '0'}</p>
                   </div>
                 </div>
 
@@ -434,19 +467,19 @@ export default function Filing() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">Return Period</p>
-                    <p className="text-lg font-semibold">February 2026</p>
+                    <p className="text-lg font-semibold">{filingStatus.gstr2b.period || 'Not available'}</p>
                   </div>
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">Total Purchase Invoices</p>
-                    <p className="text-lg font-semibold">89</p>
+                    <p className="text-lg font-semibold">{dashboardData?.gstr2b_stats?.total_invoices || 0}</p>
                   </div>
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">ITC Available</p>
-                    <p className="text-lg font-semibold">₹4,23,560</p>
+                    <p className="text-lg font-semibold">₹{dashboardData?.gstr2b_stats?.itc_available?.toLocaleString('en-IN') || '0'}</p>
                   </div>
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">Matched Invoices</p>
-                    <p className="text-lg font-semibold text-green-600">82</p>
+                    <p className="text-lg font-semibold text-green-600">{dashboardData?.gstr2b_stats?.matched_invoices || 0}</p>
                   </div>
                 </div>
 

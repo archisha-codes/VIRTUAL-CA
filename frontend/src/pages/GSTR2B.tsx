@@ -44,6 +44,29 @@ interface ReconciliationResult {
   mismatch: number;
 }
 
+// Types for parsing
+interface GSTR2BSupplier {
+  ctin?: string;
+  inv?: GSTR2BInv[];
+}
+
+interface GSTR2BInv {
+  inum?: string;
+  idt?: string;
+  txval?: string | number;
+  igst?: string | number;
+  cgst?: string | number;
+  sgst?: string | number;
+}
+
+interface PurchaseInvoice {
+  invoice_number?: string;
+  customer_gstin?: string;
+  igst_amount?: number;
+  cgst_amount?: number;
+  sgst_amount?: number;
+}
+
 export default function GSTR2BPage() {
   const [file, setFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -61,17 +84,17 @@ export default function GSTR2BPage() {
     
     // Handle different JSON structures
     if (data.b2b) {
-      data.b2b.forEach((supplier: any) => {
+      (data.b2b as GSTR2BSupplier[]).forEach((supplier) => {
         if (supplier.inv) {
-          supplier.inv.forEach((inv: any) => {
+          supplier.inv.forEach((inv) => {
             invoices.push({
-              gstin: supplier.ctin || '',
-              invoiceNumber: inv.inum || '',
-              invoiceDate: inv.idt || '',
-              taxableValue: parseFloat(inv.txval) || 0,
-              igst: parseFloat(inv.igst) || 0,
-              cgst: parseFloat(inv.cgst) || 0,
-              sgst: parseFloat(inv.sgst) || 0,
+              gstin: supplier.ctin ?? '',
+              invoiceNumber: inv.inum ?? '',
+              invoiceDate: inv.idt ?? '',
+              taxableValue: parseFloat(String(inv.txval ?? '0')),
+              igst: parseFloat(String(inv.igst ?? '0')),
+              cgst: parseFloat(String(inv.cgst ?? '0')),
+              sgst: parseFloat(String(inv.sgst ?? '0')),
               status: 'matched'
             });
           });
@@ -91,12 +114,12 @@ export default function GSTR2BPage() {
     try {
       // Get purchase invoices from localStorage or mock data
       const storedPurchaseData = localStorage.getItem('purchase_invoices');
-      const purchaseInvoices = storedPurchaseData ? JSON.parse(storedPurchaseData) : [];
+      const purchaseInvoices: PurchaseInvoice[] = storedPurchaseData ? JSON.parse(storedPurchaseData) : [];
 
       // Match purchases with GSTR-2B
       const results = gstr2bData.map(gstr2bInvoice => {
         const match = purchaseInvoices.find(
-          (p: any) => 
+          (p) => 
             p.invoice_number === gstr2bInvoice.invoiceNumber && 
             p.customer_gstin === gstr2bInvoice.gstin
         );
@@ -106,10 +129,9 @@ export default function GSTR2BPage() {
         }
 
         // Check for tax mismatch
-        const taxDiff = Math.abs(
-          (gstr2bInvoice.igst + gstr2bInvoice.cgst + gstr2bInvoice.sgst) -
-          (match.igst_amount + match.cgst_amount + match.sgst_amount)
-        );
+        const gstr2bTax = (gstr2bInvoice.igst ?? 0) + (gstr2bInvoice.cgst ?? 0) + (gstr2bInvoice.sgst ?? 0);
+        const purchaseTax = (match.igst_amount ?? 0) + (match.cgst_amount ?? 0) + (match.sgst_amount ?? 0);
+        const taxDiff = Math.abs(gstr2bTax - purchaseTax);
 
         if (taxDiff > 1) {
           return { ...gstr2bInvoice, status: 'mismatch' as const };

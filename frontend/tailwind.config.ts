@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import tailwindcssAnimate from "tailwindcss-animate";
 
 export default {
   darkMode: ["class"],
@@ -14,6 +15,44 @@ export default {
     },
     extend: {
       colors: {
+        // Custom ClearTax-style Theme
+        // Primary: #5E17EB (Purple)
+        // Accent: #00C896 (Teal/Green)
+        // Dark: #1A1A2E (Dark Navy)
+        corporate: {
+          primary: '#5E17EB',
+          primaryHover: '#4a12c4',
+          accent: '#00C896',
+          accentHover: '#00a87d',
+          dark: '#1A1A2E',
+          darkLight: '#252542',
+          darkLighter: '#2d2d4a',
+        },
+        // Extend with custom gradient colors
+        brand: {
+          50: '#f5f3ff',
+          100: '#ede9fe',
+          200: '#ddd6fe',
+          300: '#c4b5fd',
+          400: '#a78bfa',
+          500: '#5E17EB',
+          600: '#4a12c4',
+          700: '#3b0f9e',
+          800: '#2d0b79',
+          900: '#1f0651',
+        },
+        accent: {
+          50: '#e6fff7',
+          100: '#b3ffe6',
+          200: '#80ffd5',
+          300: '#4dffc4',
+          400: '#1affb3',
+          500: '#00C896',
+          600: '#00a87d',
+          700: '#008c64',
+          800: '#00704c',
+          900: '#005433',
+        },
         olive: {
           50: '#f5f7ed',
           100: '#e8ebe0',
@@ -67,7 +106,8 @@ export default {
           DEFAULT: "hsl(var(--muted))",
           foreground: "hsl(var(--muted-foreground))",
         },
-        accent: {
+        // Extended accent color for UI components (HSL-based)
+        ui_accent: {
           DEFAULT: "hsl(var(--accent))",
           foreground: "hsl(var(--accent-foreground))",
         },
@@ -121,5 +161,5 @@ export default {
       },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  plugins: [tailwindcssAnimate],
 } satisfies Config;

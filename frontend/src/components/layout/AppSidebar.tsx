@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Upload, FileText, BarChart3, FileDown, Settings, LogOut, ShoppingCart, Calculator, FolderOpen, ArrowRightLeft, FileCheck, Files, FileBarChart, Receipt, BookOpen } from 'lucide-react';
+import { Upload, FileText, BarChart3, FileDown, Settings, LogOut, ShoppingCart, Calculator, FolderOpen, ArrowRightLeft, FileCheck, Files, FileBarChart, Receipt, BookOpen, Users, Bell, CheckCircle, AlertCircle, Cloud, FileStack, Building2, Plug, GitCompare } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -21,13 +21,33 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 // Main navigation items - reorganized for GST SaaS structure
 const mainNavItems = [
   { title: 'Dashboard', url: '/dashboard', icon: FolderOpen },
+  { title: 'Clients', url: '/clients', icon: Users },
+  { title: 'Workspaces', url: '/workspaces', icon: Building2 },
+  { title: 'ERP Connectors', url: '/erp-connectors', icon: Plug },
 ];
 
 // Filing section
 const filingNavItems = [
+  { title: 'Filing Status', url: '/filing', icon: CheckCircle },
   { title: 'GSTR-1', url: '/gstr1', icon: FileText },
+  { title: 'GSTR-1 Recon', url: '/gstr1/reconciliation', icon: GitCompare },
   { title: 'GSTR-3B', url: '/gstr3b', icon: Calculator },
   { title: 'GSTR-2B', url: '/gstr2b', icon: FileCheck },
+  { title: 'GSTR-4', url: '/gstr4', icon: FileText },
+  { title: 'GSTR-6', url: '/gstr6', icon: FileText },
+  { title: 'GSTR-7', url: '/gstr7', icon: FileText },
+  { title: 'GSTR-8', url: '/gstr8', icon: FileText },
+  { title: 'GSTR-9', url: '/gstr9', icon: FileStack },
+];
+
+// GST Data Status section
+const gstStatusNavItems = [
+  { title: 'GST Data Status', url: '/gst-status', icon: Cloud },
+];
+
+// Notifications section
+const notificationsNavItems = [
+  { title: 'Notifications', url: '/notifications', icon: Bell },
 ];
 
 // IMS section
@@ -54,6 +74,11 @@ const reportsNavItems = [
   { title: 'GST Reports', url: '/reports/gst', icon: FileBarChart },
 ];
 
+// GST Announcements section
+const announcementsNavItems = [
+  { title: 'GST Announcements', url: '/announcements', icon: Bell },
+];
+
 export function AppSidebar() {
   const { signOut, profile } = useAuth();
   const [filingOpen, setFilingOpen] = useState(true);
@@ -66,7 +91,7 @@ export function AppSidebar() {
     <Sidebar className="border-r border-sidebar-border">
       <SidebarHeader className="p-4 border-b border-sidebar-border">
         <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-olive-600 to-burgundy-700 flex items-center justify-center">
+          <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-corporate-primary to-corporate-dark flex items-center justify-center">
             <span className="text-lg font-bold text-white">V</span>
           </div>
           <div className="flex flex-col">
@@ -77,7 +102,7 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent className="px-2">
-        {/* Dashboard */}
+        {/* Dashboard and Main Items */}
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
@@ -90,6 +115,30 @@ export function AppSidebar() {
                   >
                     <FolderOpen className="h-5 w-5" />
                     <span>Dashboard</span>
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <NavLink 
+                    to="/workspaces" 
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                  >
+                    <Building2 className="h-5 w-5" />
+                    <span>Workspaces</span>
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <NavLink 
+                    to="/erp-connectors" 
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                  >
+                    <Plug className="h-5 w-5" />
+                    <span>ERP Connectors</span>
                   </NavLink>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -126,6 +175,28 @@ export function AppSidebar() {
             </CollapsibleContent>
           </SidebarGroup>
         </Collapsible>
+
+        {/* GST Data Status Section */}
+        <SidebarGroup className="mt-2">
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {gstStatusNavItems.map((item) => (
+                <SidebarMenuItem key={item.title}>
+                  <SidebarMenuButton asChild>
+                    <NavLink 
+                      to={item.url} 
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                      activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                    >
+                      <item.icon className="h-5 w-5" />
+                      <span>{item.title}</span>
+                    </NavLink>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
 
         {/* IMS Section */}
         <Collapsible open={imsOpen} onOpenChange={setImsOpen} className="mt-2">
@@ -271,6 +342,38 @@ export function AppSidebar() {
           </SidebarGroup>
         </Collapsible>
 
+        {/* GST Announcements Section */}
+        <SidebarGroup className="mt-2">
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <NavLink 
+                    to="/announcements" 
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                  >
+                    <Bell className="h-5 w-5" />
+                    <span>GST Announcements</span>
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <NavLink 
+                    to="/notifications" 
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                  >
+                    <AlertCircle className="h-5 w-5" />
+                    <span>Notifications</span>
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
         <SidebarGroup className="mt-auto">
           <SidebarGroupLabel className="text-sidebar-foreground/50 text-xs uppercase tracking-wider px-3 py-2">
             Settings
@@ -298,6 +401,18 @@ export function AppSidebar() {
                   >
                     <Settings className="h-5 w-5" />
                     <span>Profile Settings</span>
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <NavLink 
+                    to="/members" 
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                  >
+                    <Users className="h-5 w-5" />
+                    <span>Team Members</span>
                   </NavLink>
                 </SidebarMenuButton>
               </SidebarMenuItem>

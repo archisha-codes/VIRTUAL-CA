@@ -1,226 +1,120 @@
 /**
- * GSTR-1 Page - Dynamic Backend Integration
+ * GSTR-1 Page
  * 
- * This page dynamically renders GSTR-1 tables based on backend data.
- * No hardcoded table definitions - automatically detects tables and columns.
+ * Professional step-by-step workflow for GSTR-1 return filing
+ * Uses the new GSTR1Workflow component for enhanced UX
+ * 
+ * CONSOLIDATED: Single canonical workflow - Backend is source of truth for GSTR1 state
+ * 
+ * Route Flow:
+ * - /gst/forms/gstr1 -> Opens drawer flow (business/period selection + OTP)
+ * - /gst/gstr1/prepare -> Main prepare page with workflow (with GSTIN/period from state)
  */
 
 import { useState, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
-import { DashboardLayout } from '@/components/layout/DashboardLayout';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { AlertCircle, RefreshCw, FileSpreadsheet } from 'lucide-react';
-import { DateRangeFilter } from '@/components/gstr3b/DateRangeFilter';
-import { ExportButtons } from '@/components/gstr1/ExportButtons';
-import DynamicTable from '@/components/gstr1/DynamicTable';
-import { format } from 'date-fns';
-import type { GSTR1ProcessResponse } from '@/lib/api';
-import '@/styles/gstr1.css';
+import { useLocation, useNavigate } from 'react-router-dom';
+import GSTR1Workflow from '@/components/gstr1/GSTR1Workflow';
+import GSTR1DrawerFlow from '@/components/gstr1/GSTR1DrawerFlow';
+import GSTR1PreparePage from '@/components/gstr1/GSTR1PreparePage';
+
+// Type for navigation state
+interface GSTR1NavigationState {
+  gstin?: string;
+  returnPeriod?: string;
+  fromDrawer?: boolean;
+  step?: string;
+}
 
 export default function GSTR1Page() {
-  const [startDate, setStartDate] = useState<Date | undefined>(undefined);
-  const [endDate, setEndDate] = useState<Date | undefined>(undefined);
   const location = useLocation();
+  const navigate = useNavigate();
+  const [drawerOpen, setDrawerOpen] = useState(true);
+  const [selectedGstins, setSelectedGstins] = useState<string[]>([]);
+  const [returnPeriod, setReturnPeriod] = useState<string>('');
+  const [isDrawerComplete, setIsDrawerComplete] = useState(false);
   
-  // Get upload result from navigation state OR localStorage
-  const uploadResultFromState = location.state?.uploadResult as GSTR1ProcessResponse | null;
+  // Check if we have state from previous navigation (e.g., from /gst/forms/gstr1)
+  const navigationState = location.state as GSTR1NavigationState;
+  const hasExistingState = navigationState?.gstin && navigationState?.returnPeriod;
   
-  // Try to get from localStorage if not in state
-  const [uploadResult, setUploadResult] = useState<GSTR1ProcessResponse | null>(uploadResultFromState);
-  
+  // If we have existing state from navigation, use it directly
   useEffect(() => {
-    // If we have data in state, use it
-    if (uploadResultFromState) {
-      setUploadResult(uploadResultFromState);
-    } else {
-      // Try to load from localStorage
-      const stored = localStorage.getItem('gstr1_upload_result');
-      if (stored) {
-        try {
-          setUploadResult(JSON.parse(stored));
-        } catch (e) {
-          console.error('Failed to parse stored GSTR1 data:', e);
-        }
-      }
+    if (hasExistingState && navigationState.fromDrawer) {
+      setSelectedGstins([navigationState.gstin!]);
+      setReturnPeriod(navigationState.returnPeriod!);
+      setDrawerOpen(false);
+      setIsDrawerComplete(true);
     }
-  }, [uploadResultFromState]);
-
-  // Get the raw backend data for dynamic rendering
-  const gstr1Data = uploadResult?.data;
+  }, [hasExistingState, navigationState]);
   
-  // Debug: Log data structure to console
-  console.log('GSTR1 Debug - uploadResult:', uploadResult);
-  console.log('GSTR1 Debug - gstr1Data:', gstr1Data);
-  
-  // Define table display names for better readability
-  const tableDisplayNames: Record<string, string> = {
-    b2b: 'B2B - Business to Business',
-    b2cl: 'B2CL - B2C Large',
-    b2cs: 'B2CS - B2C Small',
-    exp: 'Export',
-    cdnr: 'CDNR - Credit/Debit Notes (Registered)',
-    cdnur: 'CDNUR - Credit/Debit Notes (Unregistered)',
-    hsn: 'HSN Summary',
-    nil_exemp: 'Nil Exempted Supplies',
-    at: 'Advance Tax',
-    sup_ecom: 'Supplies through E-Commerce',
-    amendments: 'Amendments',
-    sez: 'SEZ Supplies',
+  // Handle continue from drawer flow - navigate to prepare page with state
+  const handleDrawerContinue = (gstins: string[], period: string) => {
+    setSelectedGstins(gstins);
+    setReturnPeriod(period);
+    setDrawerOpen(false);
+    setIsDrawerComplete(true);
+    
+    // Navigate to prepare page with the selected GSTIN and period
+    navigate('/gst/gstr1/prepare', {
+      replace: true,
+      state: {
+        gstin: gstins[0],
+        returnPeriod: period,
+        fromDrawer: true
+      }
+    });
   };
   
-  // Dynamically get tables from backend data (excluding summary)
-  const dynamicTables = gstr1Data ? Object.entries(gstr1Data)
-    .filter(([key, value]) => 
-      key !== 'summary' && 
-      Array.isArray(value) && 
-      (value as unknown[]).length > 0
-    )
-    .map(([tableName, tableData]) => ({
-      name: tableName,
-      displayName: tableDisplayNames[tableName] || tableName.toUpperCase(),
-      data: tableData as Record<string, unknown>[],
-    })) : [];
+  // If drawer is still open, show the drawer flow
+  if (!isDrawerComplete && drawerOpen) {
+    return (
+      <GSTR1DrawerFlow 
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        onContinue={handleDrawerContinue}
+      />
+    );
+  }
   
-  // Get summary data with safe access
-  const summaryData = gstr1Data?.summary;
-
-  // Prepare data for export (use original transformed data if needed) - with safe access
-  const data = {
-    b2b: gstr1Data?.b2b || [],
-    b2cl: gstr1Data?.b2cl || [],
-    b2cs: gstr1Data?.b2cs || [],
-    export: gstr1Data?.exp || [],
-    cdnr: gstr1Data?.cdnr || [],
-    hsn: gstr1Data?.hsn || [],
-    summary: summaryData,
-  };
-
-  // Loading and error states (for future async operations)
-  const isLoading = false;
-  const error = null;
-
-  const handleDateRangeChange = (start: Date | undefined, end: Date | undefined) => {
-    setStartDate(start);
-    setEndDate(end);
-  };
-
+  // Once drawer is complete, show the main GSTR-1 workflow
+  // Use either the selected GSTIN from state or from navigation
+  const gstin = selectedGstins[0] || navigationState?.gstin;
+  const period = returnPeriod || navigationState?.returnPeriod;
+  
+  // If we have no GSTIN and period, show the drawer flow
+  if (!gstin || !period) {
+    return (
+      <GSTR1DrawerFlow 
+        open={true}
+        onOpenChange={(open) => {
+          if (!open) {
+            // If drawer is closed without selection, go back to forms
+            navigate('/gst/forms');
+          }
+        }}
+        onContinue={handleDrawerContinue}
+      />
+    );
+  }
+  
+  // Show the main GSTR-1 workflow with selected GSTIN and period
+  // If we're on the prepare route (fromDrawer is true), show the prepare page first
+  const showPreparePage = navigationState?.step === 'validation' || navigationState?.step === 'summary';
+  
+  if (showPreparePage || navigationState?.fromDrawer) {
+    // Show the new prepare page with table view
+    return (
+      <GSTR1PreparePage 
+        gstin={gstin}
+        returnPeriod={period}
+      />
+    );
+  }
+  
   return (
-    <DashboardLayout title="GSTR-1 Tables">
-      <div className="space-y-6 animate-fade-in">
-        <Card className="shadow-card">
-          <CardHeader>
-            <div className="flex items-center justify-between flex-wrap gap-4">
-              <div>
-                <CardTitle>GSTR-1 Report Generation</CardTitle>
-                <CardDescription>
-                  Auto-generated GSTR-1 sections based on your validated invoice data from backend
-                </CardDescription>
-              </div>
-              <div className="flex items-center gap-2">
-                <ExportButtons
-                  data={data as any}
-                  period={startDate ? format(startDate, 'MMyyyy') : undefined}
-                  disabled={isLoading || !data}
-                />
-                <Button variant="outline" size="sm" disabled={isLoading}>
-                  <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-                  Refresh
-                </Button>
-              </div>
-            </div>
-            <div className="pt-4 border-t mt-4">
-              <DateRangeFilter
-                startDate={startDate}
-                endDate={endDate}
-                onDateRangeChange={handleDateRangeChange}
-              />
-            </div>
-          </CardHeader>
-          <CardContent>
-            {!uploadResult ? (
-              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                <AlertCircle className="h-12 w-12 mb-4" />
-                <p className="text-lg font-medium">No invoices uploaded yet</p>
-                <p className="text-sm">Upload an Excel file to generate GSTR-1 tables</p>
-                <Button 
-                  variant="outline" 
-                  className="mt-4"
-                  onClick={() => window.location.href = '/upload'}
-                >
-                  Go to Upload
-                </Button>
-              </div>
-            ) : isLoading ? (
-              <div className="space-y-4">
-                <div className="h-10 w-full bg-muted animate-pulse rounded" />
-                <div className="h-64 w-full bg-muted animate-pulse rounded" />
-              </div>
-            ) : error ? (
-              <div className="flex items-center justify-center py-12 text-destructive">
-                <AlertCircle className="h-5 w-5 mr-2" />
-                <span>Failed to load GSTR-1 data. Please try again.</span>
-              </div>
-            ) : (
-              <div className="gstr-tables-container">
-                {/* Summary Section */}
-                {summaryData && (
-                  <Card className="gstr-summary-card">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <FileSpreadsheet className="h-5 w-5" />
-                        GSTR-1 Summary
-                      </CardTitle>
-                      <CardDescription>
-                        Overview of all transactions for the selected period
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="gstr-summary-grid">
-                        {summaryData && Object.keys(summaryData).length > 0 ? (
-                          Object.entries(summaryData).map(([key, value]) => (
-                            <div key={key} className="gstr-summary-item">
-                              <span className="gstr-summary-label">
-                                {key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
-                              </span>
-                              <span className="gstr-summary-value">
-                                {typeof value === 'number' 
-                                  ? value.toLocaleString('en-IN') 
-                                  : String(value ?? '-')}
-                              </span>
-                            </div>
-                          ))
-                        ) : (
-                          <p className="text-muted-foreground text-center py-4">No summary data available</p>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
-
-                {/* Dynamic Tables Section */}
-                {dynamicTables.length > 0 ? (
-                  <div className="gstr-tables-list">
-                    {dynamicTables.map((table) => (
-                      <DynamicTable
-                        key={table.name}
-                        title={table.displayName}
-                        data={table.data}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center py-12 text-muted-foreground">
-                    <AlertCircle className="h-5 w-5 mr-2" />
-                    <span>No table data found</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    </DashboardLayout>
+    <GSTR1Workflow 
+      gstin={gstin}
+      returnPeriod={period}
+    />
   );
 }

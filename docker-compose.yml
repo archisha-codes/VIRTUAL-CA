@@ -4,7 +4,7 @@ services:
   # FastAPI Backend
   backend:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     container_name: virtual-ca-backend
     ports:
@@ -54,13 +54,13 @@ services:
       # - REDIS_URL=${REDIS_URL}
     volumes:
       # Mount logs directory for persistence
-      - ./logs:/app/logs
+      - ./backend/logs:/app/logs
       
       # Mount uploads directory for file persistence
-      - ./uploads:/tmp/uploads
+      - ./backend/uploads:/tmp/uploads
       
       # Mount .env file if it exists
-      - ./.env:/app/.env:ro
+      - ./backend/.env:/app/.env:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/ping"]
@@ -74,13 +74,13 @@ services:
   # React Frontend
   frontend:
     build:
-      context: ./services/frontend
+      context: ./frontend
       dockerfile: Dockerfile
     container_name: virtual-ca-frontend
     ports:
       - "3000:3000"
     environment:
-      - REACT_APP_API_URL=${FRONTEND_URL:-http://localhost:8000}
+      - VITE_API_URL=${FRONTEND_URL:-http://localhost:8000}
     depends_on:
       - backend
     restart: unless-stopped

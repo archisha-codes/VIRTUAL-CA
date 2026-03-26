@@ -156,24 +156,30 @@ export function ExportButtons({ data, gstin = '', period = '', disabled = false,
   // Export to Excel using backend
   const exportExcelMutation = useMutation({
     mutationFn: async () => {
-      // Try to get original gstr1_tables from localStorage
-      let gstr1Tables = null;
-      const stored = localStorage.getItem('gstr1_tables');
-      if (stored) {
-        try {
-          gstr1Tables = JSON.parse(stored);
-        } catch (e) {
-          console.error('Failed to parse stored gstr1_tables:', e);
-        }
+      // PRIMARY: Use data prop as source of truth (from backend state)
+      let tablesToExport: Record<string, unknown> | null = null;
+      
+      if (data) {
+        // Transform from data prop (canonical source)
+        tablesToExport = transformToBackendFormat(data) as unknown as Record<string, unknown>;
       }
       
-      // If we have original tables, use them; otherwise transform from data prop
-      const tablesToExport = gstr1Tables || (data ? transformToBackendFormat(data) : null);
+      // FALLBACK: Only use localStorage cache if data prop is not available
+      if (!tablesToExport) {
+        const stored = localStorage.getItem('gstr1_tables');
+        if (stored) {
+          try {
+            tablesToExport = JSON.parse(stored);
+          } catch (e) {
+            console.error('Failed to parse stored gstr1_tables:', e);
+          }
+        }
+      }
       
       if (!tablesToExport) throw new Error('No data available');
       
       return apiExportGSTR1Excel(
-        tablesToExport as Record<string, unknown>,
+        tablesToExport,
         period || '',
         gstin || '',
         '',
