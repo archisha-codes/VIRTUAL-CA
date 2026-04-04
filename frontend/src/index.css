@@ -1,0 +1,385 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* GST Compliance Tool - ClearTax Style Design System */
+/* Primary: #5E17EB (Purple) | Accent: #00C896 (Teal) | Dark: #1A1A2E */
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    /* Primary: #5E17EB - Purple */
+    --primary: 262 83% 52%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    /* Accent: #00C896 - Teal/Green */
+    --accent: 160 100% 40%;
+    --accent-foreground: 0 0% 100%;
+
+    /* ClearTax Style: Olive #556B2F, Burgundy #800020 */
+    --olive: 82 36% 35%;  /* #556B2F */
+    --burgundy: 350 53% 31%;  /* #800020 */
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 262 83% 52%;
+
+    --radius: 0.5rem;
+
+    /* Sidebar: Dark theme with #1A1A2E */
+    --sidebar-background: 240 25% 11%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 262 83% 58%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 20% 18%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 240 20% 18%;
+    --sidebar-ring: 262 83% 58%;
+  }
+
+  .dark {
+    /* Professional Dark Mode Colors for GST Compliance */
+    --background: 222 47% 6%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 8%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 10%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 262 83% 58%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 160 100% 40%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 98%;
+
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --border: 217 33% 20%;
+    --input: 217 33% 20%;
+    --ring: 262 83% 58%;
+
+    --sidebar-background: 222 47% 6%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 262 83% 58%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217 33% 15%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 217 33% 15%;
+    --sidebar-ring: 262 83% 58%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-size: 13px;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    font-size: 16px;
+  }
+  
+  /* Smooth transitions for theme changes */
+  html {
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+  
+  html.dark {
+    color-scheme: dark;
+  }
+}
+
+@layer utilities {
+  /* ClearTax Style Gradient - Purple to Teal */
+  .gradient-primary {
+    background: linear-gradient(135deg, #5E17EB 0%, #00C896 100%);
+  }
+  
+  .gradient-corporate {
+    background: linear-gradient(135deg, #5E17EB 0%, #1A1A2E 100%);
+  }
+  
+  .text-gradient-corporate {
+    background: linear-gradient(135deg, #5E17EB 0%, #00C896 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  
+  /* Primary Button Styles */
+  .btn-primary,
+  button[type="submit"],
+  .btn-primary:active {
+    background-color: #5E17EB !important;
+    color: white !important;
+  }
+  
+  button:hover {
+    background-color: #4a12c4;
+  }
+  
+  /* Accent color utilities */
+  .text-accent-primary {
+    color: #5E17EB;
+  }
+  
+  .text-accent-teal {
+    color: #00C896;
+  }
+  
+  .bg-accent-primary {
+    background-color: #5E17EB;
+  }
+  
+  .bg-accent-teal {
+    background-color: #00C896;
+  }
+  
+  .bg-dark-theme {
+    background-color: #1A1A2E;
+  }
+  
+  .shadow-card {
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  }
+  
+  .shadow-card-hover {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  }
+  
+  /* Professional Color Palette - Purple + Teal */
+  :root {
+    --primary-purple: #5E17EB;
+    --accent-teal: #00C896;
+    --dark-navy: #1A1A2E;
+  }
+  
+  /* Button primary override */
+  .btn-primary,
+  button[type="submit"],
+  .btn-primary:active {
+    background-color: var(--primary-purple) !important;
+    color: white !important;
+  }
+  
+  button:hover {
+    background-color: #4a12c4;
+  }
+  
+  /* Vertical News Slider Animation */
+  .vertical-news-slider {
+    animation: verticalScroll 20s linear infinite;
+  }
+  
+  .vertical-news-slider:hover {
+    animation-play-state: paused;
+  }
+  
+  @keyframes verticalScroll {
+    0% {
+      transform: translateY(0);
+    }
+    100% {
+      transform: translateY(-50%);
+    }
+  }
+  
+  /* Glassmorphism styles - ClearTax Style */
+  .glass {
+    background: rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+  }
+  
+  .glass-dark {
+    background: rgba(15, 23, 42, 0.15);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+  }
+  
+  .glass-card {
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  }
+  
+  .glass-card:hover {
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  }
+  
+  /* Dark mode glass card */
+  .dark .glass-card {
+    background: rgba(30, 41, 59, 0.75);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+  
+  .dark .glass-card:hover {
+    background: rgba(30, 41, 59, 0.9);
+  }
+  
+  /* Olive and Burgundy theme colors */
+  .bg-olive { background-color: #556B2F; }
+  .bg-burgundy { background-color: #800020; }
+  .text-olive { color: #556B2F; }
+  .text-burgundy { color: #800020; }
+  .border-olive { border-color: #556B2F; }
+  .border-burgundy { border-color: #800020; }
+  
+  /* Glass effect with olive accent */
+  .glass-olive {
+    background: rgba(85, 107, 47, 0.15);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(85, 107, 47, 0.3);
+  }
+  
+  /* Glass effect with burgundy accent */
+  .glass-burgundy {
+    background: rgba(128, 0, 32, 0.15);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(128, 0, 32, 0.3);
+  }
+  
+  /* Theme-aware text colors */
+  .text-theme-primary {
+    @apply text-slate-900 dark:text-slate-100;
+  }
+  
+  .text-theme-secondary {
+    @apply text-slate-500 dark:text-slate-400;
+  }
+  
+  .text-theme-muted {
+    @apply text-slate-400 dark:text-slate-500;
+  }
+  
+  /* Theme-aware backgrounds */
+  .bg-theme-surface {
+    @apply bg-white dark:bg-slate-800;
+  }
+  
+  .bg-theme-card {
+    @apply bg-slate-50 dark:bg-slate-800/50;
+  }
+  
+  .bg-theme-muted {
+    @apply bg-slate-100 dark:bg-slate-800;
+  }
+  
+  /* Theme-aware borders */
+  .border-theme {
+    @apply border-slate-200 dark:border-slate-700;
+  }
+  
+  /* Theme-aware hover states */
+  .hover-theme:hover {
+    @apply bg-slate-100 dark:bg-slate-800;
+  }
+  
+  /* Professional dark mode color utilities */
+  .dark-bg-primary {
+    @apply bg-slate-900;
+  }
+  
+  .dark-bg-surface {
+    @apply bg-slate-800;
+  }
+  
+  .dark-bg-elevated {
+    @apply bg-slate-700;
+  }
+  
+  /* Chart-friendly dark mode colors */
+  .dark-chart-grid {
+    stroke: rgba(148, 163, 184, 0.1);
+  }
+  
+  .dark-chart-text {
+    fill: #94a3b8;
+  }
+}
+
+/* Table dark mode styles */
+@layer components {
+  .table-theme thead tr {
+    @apply bg-slate-50 dark:bg-slate-800/50;
+  }
+  
+  .table-theme th {
+    @apply text-slate-600 dark:text-slate-400;
+  }
+  
+  .table-theme td {
+    @apply text-slate-900 dark:text-slate-100;
+  }
+  
+  .table-theme tbody tr {
+    @apply border-slate-200 dark:border-slate-700;
+  }
+  
+  .table-theme tbody tr:hover {
+    @apply bg-slate-50 dark:bg-slate-800/30;
+  }
+}
+
+/* Status badge dark mode */
+@layer components {
+  .badge-success {
+    @apply bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400;
+  }
+  
+  .badge-warning {
+    @apply bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400;
+  }
+  
+  .badge-error {
+    @apply bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400;
+  }
+  
+  .badge-info {
+    @apply bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400;
+  }
+}
