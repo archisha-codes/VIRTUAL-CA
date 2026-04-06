@@ -57,6 +57,8 @@ INDIAN_STATE_CODES = {
     '27': 'Maharashtra', '28': 'Andhra Pradesh', '29': 'Karnataka', '30': 'Goa',
     '31': 'Lakshadweep', '32': 'Kerala', '33': 'Tamil Nadu', '34': 'Puducherry',
     '35': 'Andaman and Nicobar Islands', '36': 'Telangana', '37': 'Ladakh',
+    '96': 'Other Countries',  # Used for Export invoices
+    '97': 'Other Territory',
 }
 
 # Union territories (for inter-state determination)
@@ -593,6 +595,12 @@ def validate_amount_consistency(
     if pd.isna(invoice_val) or pd.isna(taxable):
         return None
     
+    # For export invoices (POS = 96-Other Countries), invoice value is typically
+    # the FOB value without GST, so skip this check for exports
+    pos = str(row.get("place_of_supply", "") or "").strip()
+    if pos.startswith("96") or "other countries" in pos.lower():
+        return None
+    
     invoice_val = float(invoice_val)
     taxable = float(taxable)
     total_tax = float(igst) + float(cgst) + float(sgst) + float(cess)
@@ -659,40 +667,37 @@ def validate_place_of_supply(
     
     pos_str = str(pos).strip()
     
-    # Check if numeric code
-    if pos_str.isdigit():
-        if len(pos_str) != 2 or pos_str not in INDIAN_STATE_CODES:
-            return ValidationResult(
-                rule_name="pos_invalid_code",
-                category=ValidationCategory.FORMAT,
-                severity=rule.severity,
-                message=f"Invalid place of supply code: {pos}",
-                field="place_of_supply",
-                value=pos,
-                suggestion="Use valid state code (01-37) or state name",
-                error_code="VAL_FORMAT_POS_INVALID",
-                row_index=kwargs.get("row_index")
-            )
+    # Extract state code (handle 'XX-StateName' format)
+    if '-' in pos_str:
+        pos_code = pos_str.split('-')[0].strip()
+    elif pos_str.isdigit():
+        pos_code = pos_str
     else:
-        # Check state name
-        found = False
-        for code, name in INDIAN_STATE_CODES.items():
-            if name.lower() in pos_str.lower() or pos_str.lower() in name.lower():
-                found = True
-                break
-        
-        if not found:
-            return ValidationResult(
-                rule_name="pos_unknown_state",
-                category=ValidationCategory.FORMAT,
-                severity=rule.severity,
-                message=f"Unknown place of supply: {pos}",
-                field="place_of_supply",
-                value=pos,
-                suggestion="Use valid Indian state name or code",
-                error_code="VAL_FORMAT_POS_UNKNOWN",
-                row_index=kwargs.get("row_index")
-            )
+        pos_code = None
+    
+    # Direct code match (includes 96 for Exports, 97 for Other Territory)
+    if pos_code and pos_code in INDIAN_STATE_CODES:
+        return None
+    
+    # Check by state name match
+    found = False
+    for code, name in INDIAN_STATE_CODES.items():
+        if name.lower() in pos_str.lower() or pos_str.lower() in name.lower():
+            found = True
+            break
+    
+    if not found:
+        return ValidationResult(
+            rule_name="pos_unknown_state",
+            category=ValidationCategory.FORMAT,
+            severity=rule.severity,
+            message=f"Unknown place of supply: {pos}",
+            field="place_of_supply",
+            value=pos,
+            suggestion="Use valid Indian state name, state code (01-37), '96' for exports, or '97' for Other Territory",
+            error_code="VAL_FORMAT_POS_UNKNOWN",
+            row_index=kwargs.get("row_index")
+        )
     
     return None
 
@@ -702,11 +707,13 @@ def validate_hsn_code(
     rule: ValidationRule,
     **kwargs
 ) -> Optional[ValidationResult]:
-    """Validate HSN/SAC code format."""
+    """Validate HSN/SAC code format and consistency."""
     hsn = row.get("hsn_code")
+    uqc = row.get("uqc")
+    description = row.get("item_description")
     
     if pd.isna(hsn) or not str(hsn).strip():
-        return None  # HSN is optional
+        return None  # HSN is optional here, summary checks will enforce if mandatory
     
     hsn_str = str(hsn).strip()
     
@@ -723,7 +730,32 @@ def validate_hsn_code(
             error_code=rule.error_code,
             row_index=kwargs.get("row_index")
         )
-    
+        
+    # Strong portal-like validation: if HSN is provided, UQC and Description should be provided
+    if pd.isna(uqc) or not str(uqc).strip():
+        return ValidationResult(
+            rule_name="hsn_missing_uqc",
+            category=ValidationCategory.CONSISTENCY,
+            severity=ValidationSeverity.ERROR,
+            message=f"UQC is mandatory when HSN/SAC is provided: {hsn}",
+            field="uqc",
+            value=uqc,
+            error_code="VAL_HSN_UQC",
+            row_index=kwargs.get("row_index")
+        )
+        
+    if pd.isna(description) or not str(description).strip():
+         return ValidationResult(
+            rule_name="hsn_missing_desc",
+            category=ValidationCategory.CONSISTENCY,
+            severity=ValidationSeverity.WARNING,
+            message=f"Item description is advised when HSN/SAC is provided: {hsn}",
+            field="item_description",
+            value=description,
+            error_code="VAL_HSN_DESC",
+            row_index=kwargs.get("row_index")
+        )
+
     return None
 
 
@@ -916,6 +948,131 @@ def validate_multi_rate_invoice(
     return None
 
 
+def validate_amendment_linkage(
+    row: pd.Series,
+    rule: ValidationRule,
+    **kwargs
+) -> Optional[ValidationResult]:
+    """Validate amendment linkage to original invoice."""
+    is_amendment = row.get("is_amendment", False)
+    if not is_amendment:
+        return None
+
+    ref_inv = row.get("reference_invoice_number")
+    if pd.isna(ref_inv) or not str(ref_inv).strip():
+        return ValidationResult(
+            rule_name=rule.name,
+            category=ValidationCategory.CONSISTENCY,
+            severity=rule.severity,
+            message="Amendment must have a reference to the original invoice",
+            field="reference_invoice_number",
+            value=ref_inv,
+            suggestion="Provide original invoice number",
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+
+    # Check amendment window if possible (e.g., date cannot be prior to original date)
+    orig_date = row.get("original_invoice_date")
+    inv_date = row.get("invoice_date")
+    if pd.notna(orig_date) and pd.notna(inv_date):
+        # basic check: amendment date cannot be before original date
+        try:
+            o_date = pd.to_datetime(orig_date).date()
+            i_date = pd.to_datetime(inv_date).date()
+            if i_date < o_date:
+                return ValidationResult(
+                    rule_name=rule.name,
+                    category=ValidationCategory.DATE,
+                    severity=ValidationSeverity.WARNING,
+                    message="Amendment date cannot be before original invoice date",
+                    field="invoice_date",
+                    value=inv_date,
+                    error_code=rule.error_code,
+                    row_index=kwargs.get("row_index")
+                )
+        except Exception:
+            pass
+
+    return None
+
+
+def validate_note_timing(
+    row: pd.Series,
+    rule: ValidationRule,
+    **kwargs
+) -> Optional[ValidationResult]:
+    """Validate credit/debit note linkage and timing rules."""
+    doc_type = str(row.get("document_type", "")).lower()
+    invoice_value = row.get("invoice_value", 0)
+    try:
+        val = float(invoice_value)
+    except (TypeError, ValueError):
+        val = 0
+
+    is_note = val < 0 or "credit" in doc_type or "debit" in doc_type or "note" in doc_type
+    
+    if not is_note:
+        return None
+
+    ref_inv = row.get("reference_invoice_number")
+    if pd.isna(ref_inv) or not str(ref_inv).strip():
+        return ValidationResult(
+            rule_name=rule.name,
+            category=ValidationCategory.CONSISTENCY,
+            severity=rule.severity,
+            message="Credit/Debit note must reference original invoice",
+            field="reference_invoice_number",
+            value=ref_inv,
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+    return None
+
+
+def validate_document_series(
+    row: pd.Series,
+    rule: ValidationRule,
+    **kwargs
+) -> Optional[ValidationResult]:
+    """Validate Table 13 document series governance."""
+    # Assuming Table 13 implies summary of documents issued.
+    doc_type = str(row.get("document_type", ""))
+    invoice_no = str(row.get("invoice_number", ""))
+    
+    if not doc_type or not doc_type.strip():
+        return None  # Will be caught by general format check if we rely on it
+
+    # Document series usually require sequential numbers or specific formats.
+    # For now, flag if empty or too long.
+    if len(invoice_no) > 16:
+        return ValidationResult(
+            rule_name=rule.name,
+            category=ValidationCategory.FORMAT,
+            severity=ValidationSeverity.WARNING,
+            message=f"Document series exceeds 16 chars: {invoice_no}",
+            field="invoice_number",
+            value=invoice_no,
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+            
+    is_cancelled = str(row.get("is_cancelled", "")).lower() in ["true", "1", "yes"]
+    if is_cancelled and pd.isna(invoice_no):
+         return ValidationResult(
+            rule_name=rule.name,
+            category=ValidationCategory.CONSISTENCY,
+            severity=ValidationSeverity.ERROR,
+            message="Cancelled document must specify an invoice number",
+            field="invoice_number",
+            value=invoice_no,
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+
+    return None
+
+
 # =============================================================================
 # MAIN VALIDATION ENGINE
 # =============================================================================
@@ -1103,6 +1260,36 @@ class ValidationEngine:
             suggestion="Invoices with multiple rates should be split by rate",
             error_code="VAL_TAX_MULTI_RATE"
         ))
+
+        # ADD: Amendment linkage
+        self.add_rule(ValidationRule(
+            name="amendment_linkage",
+            category=ValidationCategory.CONSISTENCY,
+            severity=ValidationSeverity.ERROR,
+            check_func=validate_amendment_linkage,
+            message="Amendment linkage validation",
+            error_code="VAL_AMEND_LINK"
+        ))
+
+        # ADD: Note timing
+        self.add_rule(ValidationRule(
+            name="note_timing",
+            category=ValidationCategory.CONSISTENCY,
+            severity=ValidationSeverity.ERROR,
+            check_func=validate_note_timing,
+            message="Credit/Debit note linkage validation",
+            error_code="VAL_NOTE_LINK"
+        ))
+
+        # ADD: Document series
+        self.add_rule(ValidationRule(
+            name="document_series",
+            category=ValidationCategory.FORMAT,
+            severity=ValidationSeverity.WARNING,
+            check_func=validate_document_series,
+            message="Document series consistency check",
+            error_code="VAL_DOC_SERIES"
+        ))
     
     def add_rule(self, rule: ValidationRule):
         """Add a custom validation rule."""
@@ -1197,28 +1384,47 @@ class ValidationEngine:
         if "invoice_number" not in df.columns:
             return
         
-        # Use gstin + invoice_number for B2B, just invoice_number for B2C
-        if "gstin" in df.columns:
-            dup_cols = ["invoice_number", "gstin"]
-        else:
-            dup_cols = ["invoice_number"]
+        # We need financial year for duplicate check if available.
+        # Let's compute a temp fy field if return_period or invoice_date is there.
+        temp_df = df.copy()
         
-        duplicates = df[df.duplicated(subset=dup_cols, keep=False)]
+        def get_fy(row):
+            dt = row.get("invoice_date")
+            if pd.notna(dt):
+                try:
+                    d = pd.to_datetime(dt)
+                    year = d.year
+                    if d.month < 4:
+                        return f"{year-1}-{year}"
+                    return f"{year}-{year+1}"
+                except:
+                    pass
+            return "unknown"
+            
+        temp_df["_temp_fy"] = temp_df.apply(get_fy, axis=1)
+
+        # Use gstin + invoice_number + fy
+        if "gstin" in temp_df.columns:
+            dup_cols = ["invoice_number", "gstin", "_temp_fy"]
+        else:
+            dup_cols = ["invoice_number", "_temp_fy"]
+        
+        duplicates = temp_df[temp_df.duplicated(subset=dup_cols, keep=False)]
         
         if not duplicates.empty:
             # Group duplicates
             for group_key, group in duplicates.groupby(dup_cols):
                 if len(group) > 1:
-                    if len(dup_cols) == 1:
-                        invoice_no = group_key
+                    if len(dup_cols) == 2:
+                        invoice_no, fy = group_key
                         gstin = None
                     else:
-                        invoice_no, gstin = group_key
+                        invoice_no, gstin, fy = group_key
                     result = ValidationResult(
                         rule_name="duplicate_invoice",
                         category=ValidationCategory.DUPLICATE,
                         severity=ValidationSeverity.ERROR,
-                        message=f"Duplicate invoice found: {invoice_no} (appears {len(group)} times)",
+                        message=f"Duplicate invoice: {invoice_no} in FY {fy} (appears {len(group)} times)",
                         field="invoice_number",
                         value=invoice_no,
                         suggestion="Remove duplicate entries",

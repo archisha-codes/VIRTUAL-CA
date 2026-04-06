@@ -326,7 +326,7 @@ def detect_header_row(
         if matches >= 3:
             return idx
     
-    return 0  # Default to first row
+    return -1  # Return -1 if no header row found
 
 
 def detect_sheet_names(file_path: str) -> List[str]:
@@ -409,7 +409,8 @@ class ExcelInputAdapter:
                 file_path,
                 encoding=encoding,
                 skipfooter=skip_footer,
-                engine="python"
+                engine="python",
+                header=None
             )
         else:
             # Handle Excel files
@@ -424,16 +425,22 @@ class ExcelInputAdapter:
             df = pd.read_excel(
                 file_path,
                 sheet_name=sheet_name,
-                skipfooter=skip_footer
+                skipfooter=skip_footer,
+                header=None
             )
         
         # Auto-detect header row if not specified
         if header_row is None:
             header_row = detect_header_row(df, self.mapper)
         
-        if header_row > 0:
-            df.columns = df.iloc[header_row]
+        # If a header row was successfully found, set it
+        if header_row >= 0:
+            # Set string interpolation for all columns to avoid Timestamp crashes later
+            df.columns = [str(col) if pd.notna(col) else f"Unnamed_{i}" for i, col in enumerate(df.iloc[header_row])]
             df = df.iloc[header_row + 1:]
+        else:
+            # If no header was found, use column indices as string names
+            df.columns = [str(c) for c in df.columns]
         
         # Clean up DataFrame
         df = self._cleanup_dataframe(df)

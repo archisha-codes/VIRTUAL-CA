@@ -2699,15 +2699,37 @@ async def get_columns(
         
         if not contents:
             raise HTTPException(status_code=400, detail="Empty file uploaded")
+            
+        import tempfile
+        import os
+        from pathlib import Path
+        from india_compliance.gst_india.engine_core.input_adapter import ExcelInputAdapter
+        import math
         
-        df = pd.read_excel(io.BytesIO(contents))
-        columns = df.columns.tolist()
-        
-        return {
-            "columns": columns,
-            "column_count": len(columns),
-            "sample_data": df.head(3).to_dict(orient="records") if len(df) > 0 else []
-        }
+        suffix = Path(file.filename).suffix if file.filename else ".xlsx"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+            
+        try:
+            adapter = ExcelInputAdapter(strict_mode=False)
+            df = adapter.load_excel(tmp_path)
+            columns = df.columns.tolist()
+            
+            # Map columns cleanly
+            _, mapping, _ = adapter.map_columns(df)
+            
+            # Replace NaNs with None for JSON serialization
+            df = df.replace({float('nan'): None})
+            
+            return {
+                "columns": columns,
+                "column_count": len(columns),
+                "suggested_mapping": mapping,
+                "sample_data": df.head(3).to_dict(orient="records") if len(df) > 0 else []
+            }
+        finally:
+            os.unlink(tmp_path)
     
     except Exception as e:
         logger.exception(f"Error extracting columns: {str(e)}")
@@ -2741,31 +2763,47 @@ async def process_gstr1(
     """
     try:
         from india_compliance.gst_india.engine_core.engine import GSTR1Engine
+        from india_compliance.gst_india.engine_core.input_adapter import ExcelInputAdapter
+        import tempfile
+        import os
+        from pathlib import Path
         
         # Step 1: Read Excel file
         contents = await file.read()
-        df = pd.read_excel(io.BytesIO(contents))
         
-        print("=" * 60)
-        print("DEBUG: /api/gstr1/process endpoint (using GSTR1Engine)")
-        print("=" * 60)
-        print(f"Original columns: {df.columns.tolist()}")
-        logger.info(f"Original columns: {df.columns.tolist()}")
-        
-        # Step 2: Apply mapping
-        mapping_dict = json.loads(mapping)
-        print(f"Applied mapping: {mapping_dict}")
-        logger.info(f"Applied mapping: {mapping_dict}")
-        
-        reverse_mapping = {v: k for k, v in mapping_dict.items() if v}
-        df.rename(columns=reverse_mapping, inplace=True)
-        print(f"Columns after rename: {df.columns.tolist()}")
-        logger.info(f"Columns after rename: {df.columns.tolist()}")
-        
-        # Step 3: Run full GSTR1Engine pipeline
-        print("\nRunning GSTR1Engine pipeline...")
-        engine = GSTR1Engine(company_gstin=company_gstin or "")
-        gstr1_data = engine.run_from_dataframe(df)
+        suffix = Path(file.filename).suffix if file.filename else ".xlsx"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+            
+        try:
+            adapter = ExcelInputAdapter(strict_mode=False)
+            df = adapter.load_excel(tmp_path)
+            
+            print("=" * 60)
+            print("DEBUG: /api/gstr1/process endpoint (using GSTR1Engine)")
+            print("=" * 60)
+            print(f"Original extracted columns: {df.columns.tolist()}")
+            logger.info(f"Original extracted columns: {df.columns.tolist()}")
+            
+            # Step 2: Apply mapping
+            mapping_dict = json.loads(mapping) # {canonical: original_header}
+            print(f"Applied mapping: {mapping_dict}")
+            logger.info(f"Applied mapping: {mapping_dict}")
+            
+            # Because the frontend sends mapping as {canonical_field: user_selected_original_header}
+            reverse_mapping = {v: k for k, v in mapping_dict.items() if v}
+            df.rename(columns=reverse_mapping, inplace=True)
+            print(f"Columns after rename: {df.columns.tolist()}")
+            logger.info(f"Columns after rename: {df.columns.tolist()}")
+            
+            # Step 3: Run full GSTR1Engine pipeline
+            print("\nRunning GSTR1Engine pipeline...")
+            engine = GSTR1Engine(company_gstin=company_gstin or "")
+            gstr1_data = engine.run_from_dataframe(df)
+            
+        finally:
+            os.unlink(tmp_path)
         
         # Extract validation reports
         input_validation_report = gstr1_data.pop("input_validation_report", {})
@@ -4697,10 +4735,22 @@ async def validate_gstr1_file(
     """
     try:
         from india_compliance.gst_india.engine_core.engine import GSTR1Engine
+        from india_compliance.gst_india.engine_core.input_adapter import ExcelInputAdapter
         
-        # Step 1: Read Excel file
+        # Step 1: Read Excel file using ExcelInputAdapter (handles header detection)
         contents = await file.read()
-        df = pd.read_excel(io.BytesIO(contents))
+        
+        # Write to temp file (ExcelInputAdapter needs a file path)
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+            tmp_file.write(contents)
+            tmp_path = tmp_file.name
+        
+        try:
+            adapter = ExcelInputAdapter(strict_mode=False)
+            df = adapter.load_excel(tmp_path)
+        finally:
+            os.unlink(tmp_path)
         
         print("=" * 60)
         print("DEBUG: /api/gstr1/validate endpoint")
@@ -4712,6 +4762,7 @@ async def validate_gstr1_file(
         mapping_dict = json.loads(mapping)
         reverse_mapping = {v: k for k, v in mapping_dict.items() if v}
         df.rename(columns=reverse_mapping, inplace=True)
+        print(f"Columns after mapping: {df.columns.tolist()}")
         
         # Step 3: Run validation through GSTR1Engine
         print("\nRunning GSTR1Engine validation pipeline...")

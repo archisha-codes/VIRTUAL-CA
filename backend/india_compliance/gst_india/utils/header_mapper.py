@@ -444,6 +444,7 @@ def normalize_header(header: str) -> str:
     """
     Normalize header for comparison:
     - Convert to lowercase
+    - Replace underscores with spaces (so Invoice_No matches "invoice no")
     - Remove special characters (keep alphanumeric and spaces)
     - Remove extra whitespace
     """
@@ -452,6 +453,9 @@ def normalize_header(header: str) -> str:
     
     # Convert to lowercase
     normalized = header.lower().strip()
+    
+    # Replace underscores with spaces first (before other normalization)
+    normalized = normalized.replace('_', ' ')
     
     # Remove special characters (keep alphanumeric and spaces)
     normalized = re.sub(r'[^\w\s]', '', normalized)

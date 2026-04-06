@@ -10,8 +10,12 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
+import pandas as pd
 
-from india_compliance.gst_india.utils.gstr3b.gstr3b_data import generate_gstr3b_summary
+from india_compliance.gst_india.utils.gstr3b.gstr3b_data import generate_gstr3b_summary_v2
+from india_compliance.gst_india.engine_core.validation_engine import ValidationEngine
+from india_compliance.gst_india.engine_core.classification_engine import classify_transaction
+from india_compliance.gst_india.gstr1_data import generate_gstr1_json, generate_gstr1_tables
 
 
 # Create router
@@ -28,6 +32,73 @@ def get_filename(prefix: str, gstin: str, return_period: str, extension: str) ->
     """
     timestamp = datetime.now().strftime("%Y%m%d")
     return f"{prefix}_{gstin}_{return_period}_{timestamp}.{extension}"
+
+def get_mock_invoices_for_pipeline(gstin: str, return_period: str) -> list[dict]:
+    """Provides standard mock invoices matching proper columns.
+       In a real app, this fetches from ERP connectors instead.
+    """
+    return [
+        {
+            "invoice_number": "INV-B2B-1",
+            "invoice_date": f"15/{return_period}",
+            "gstin": "07AAAAA1234A1ZA",
+            "place_of_supply": "07-Delhi",
+            "invoice_value": 118000,
+            "taxable_value": 100000,
+            "cgst": 9000,
+            "sgst": 9000,
+            "igst": 0,
+            "cess": 0,
+            "rate": 18,
+            "reverse_charge": False,
+        },
+        {
+            "invoice_number": "INV-B2B-2",
+            "invoice_date": f"16/{return_period}",
+            "gstin": "27BBBBB1234A1ZB",
+            "place_of_supply": "27-Maharashtra",
+            "invoice_value": 236000,
+            "taxable_value": 200000,
+            "cgst": 0,
+            "sgst": 0,
+            "igst": 36000,
+            "cess": 0,
+            "rate": 18,
+            "reverse_charge": False,
+        },
+        {
+            "invoice_number": "INV-B2CL-1",
+            "invoice_date": f"17/{return_period}",
+            "gstin": "",
+            "place_of_supply": "27-Maharashtra",
+            "invoice_value": 354000,
+            "taxable_value": 300000,
+            "cgst": 0,
+            "sgst": 0,
+            "igst": 54000,
+            "cess": 0,
+            "rate": 18,
+            "reverse_charge": False,
+        },
+        {
+            "invoice_number": "INV-EXP-1",
+            "invoice_date": f"18/{return_period}",
+            "gstin": "",
+            "place_of_supply": "96-Other Countries",
+            "invoice_value": 150000,
+            "taxable_value": 150000,
+            "cgst": 0,
+            "sgst": 0,
+            "igst": 0,  # WOPAY assumed here, logic normally computes
+            "cess": 0,
+            "rate": 0,
+            "port_code": "INBOM4",
+            "shipping_bill_number": "SB123456",
+            "shipping_bill_date": f"18/{return_period}",
+            "is_export": True,
+            "reverse_charge": False,
+        }
+    ]
 
 
 # =============================================================================
@@ -77,23 +148,34 @@ async def download_gstr1_json(
         )
     
     # =====================================================================
-    # TODO: Replace with actual GSTR-1 data fetching logic
-    # The following is placeholder data - replace with actual data retrieval
+    # Use real validation engine and generator
     # =====================================================================
-    gstr1_data = {
-        "gstin": gstin,
-        "fp": return_period,
-        "gt": 0.0,
-        "cur_gt": 0.0,
-        "b2b": [],
-        "b2cl": [],
-        "b2cs": [],
-        "export": [],
-        "cdnr": [],
-        "cdnur": [],
-        "nil_exempt": [],
-        "hsn_summary": [],
-    }
+    raw_data = get_mock_invoices_for_pipeline(gstin, return_period)
+    df = pd.DataFrame(raw_data)
+    
+    # 1. Validation and Auto-correction
+    engine = ValidationEngine(return_period=return_period.replace('/', ''))
+    report = engine.validate_dataframe(df, gstin)
+    df_corrected = engine.apply_corrections(df, report)
+    
+    # 2. Classification
+    classified_records = []
+    for _, row in df_corrected.iterrows():
+        row_dict = row.to_dict()
+        cat, subcat = classify_transaction(row_dict, company_gstin=gstin, return_period=return_period)
+        row_dict["_category"] = cat
+        row_dict["_sub_category"] = subcat
+        classified_records.append(row_dict)
+    
+    # 3. Generate JSON
+    gstr1_data, gen_report = generate_gstr1_json(
+        clean_data=classified_records,
+        company_gstin=gstin,
+        return_period=return_period,
+        gstin=gstin,
+        username="auto_export",
+        validate=True
+    )
     
     # Generate JSON string
     json_str = json.dumps(gstr1_data, indent=2)
@@ -168,77 +250,28 @@ async def download_gstr3b_excel(
         company_gstin = gstin
     
     # =====================================================================
-    # Generate GSTR-3B Summary
-    # TODO: Replace with actual GSTR-1 data fetching logic
-    # The following is placeholder data - replace with actual data retrieval
+    # Use actual pipeline logic mapped to GSTR-3B summary format
     # =====================================================================
-    gstr1_data = {
-        "b2b": [
-            {
-                "place_of_supply": "07-Delhi",
-                "reverse_charge": False,
-                "items": [
-                    {"taxable_value": 100000, "igst_amount": 0, "cgst_amount": 9000, "sgst_amount": 9000, "cess_amount": 0}
-                ]
-            },
-            {
-                "place_of_supply": "27-Maharashtra",
-                "reverse_charge": False,
-                "items": [
-                    {"taxable_value": 200000, "igst_amount": 36000, "cgst_amount": 0, "sgst_amount": 0, "cess_amount": 0}
-                ]
-            },
-        ],
-        "b2cl": [
-            {
-                "place_of_supply": "27-Maharashtra",
-                "items": [
-                    {"taxable_value": 300000, "igst_amount": 54000, "cgst_amount": 0, "sgst_amount": 0, "cess_amount": 0}
-                ]
-            }
-        ],
-        "b2cs": [
-            {
-                "place_of_supply": "07-Delhi",
-                "items": [
-                    {"taxable_value": 50000, "igst_amount": 0, "cgst_amount": 4500, "sgst_amount": 4500, "cess_amount": 0}
-                ]
-            },
-            {
-                "place_of_supply": "27-Maharashtra",
-                "items": [
-                    {"taxable_value": 30000, "igst_amount": 5400, "cgst_amount": 0, "sgst_amount": 0, "cess_amount": 0}
-                ]
-            }
-        ],
-        "export": [
-            {
-                "place_of_supply": "96-Other Countries",
-                "items": [
-                    {"taxable_value": 150000, "igst_amount": 27000, "cgst_amount": 0, "sgst_amount": 0, "cess_amount": 0}
-                ]
-            }
-        ],
-        "cdnr": [
-            {
-                "place_of_supply": "07-Delhi",
-                "items": [
-                    {"taxable_value": 5000, "igst_amount": 0, "cgst_amount": 450, "sgst_amount": 450, "cess_amount": 0}
-                ]
-            }
-        ],
-        "cdnur": [
-            {
-                "place_of_supply": "27-Maharashtra",
-                "items": [
-                    {"taxable_value": 2500, "igst_amount": 450, "cgst_amount": 0, "sgst_amount": 0, "cess_amount": 0}
-                ]
-            }
-        ],
-    }
+    raw_data = get_mock_invoices_for_pipeline(gstin, return_period)
+    df = pd.DataFrame(raw_data)
     
-    # Generate GSTR-3B summary from GSTR-1 data
-    summary = generate_gstr3b_summary(gstr1_data, company_gstin)
+    # 1. Validation and Correction
+    engine = ValidationEngine(return_period=return_period.replace('/', ''))
+    report = engine.validate_dataframe(df, company_gstin)
+    df_corrected = engine.apply_corrections(df, report)
+    
+    # 2. Convert Data
+    processed_records = df_corrected.to_dict('records')
+    
+    # 3. Generate Tables
+    tables, gen_report = generate_gstr1_tables(
+        clean_data=processed_records,
+        company_gstin=company_gstin,
+        validate=True
+    )
+    
+    # Generate GSTR-3B summary from GSTR-1 data tables (v2 format structure)
+    summary = generate_gstr3b_summary_v2(tables, company_gstin)
     
     # Create Excel file in memory
     output = io.BytesIO()

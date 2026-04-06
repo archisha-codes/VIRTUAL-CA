@@ -1542,14 +1542,18 @@ def generate_gstr1_tables(
         invoice_value = flt(row.get("invoice_value", 0))
         
         # FIX 8: Strict validation - check if invoice_value ≈ taxable + taxes
+        # Skip for exports: export invoice value is typically FOB value (taxable only, no GST)
         taxable_value = signed["taxable_value"]
         igst_amount = signed["igst"]
         cgst_amount = signed["cgst"]
         sgst_amount = signed["sgst"]
         cess_amount = signed["cess"]
         
+        pos_code = extract_state_code(row.get("place_of_supply", ""))
+        is_export_row = pos_code == "96"
+        
         expected_value = taxable_value + igst_amount + cgst_amount + sgst_amount + cess_amount
-        if invoice_value > 0 and abs(invoice_value - expected_value) > 0.05:
+        if invoice_value > 0 and not is_export_row and abs(invoice_value - expected_value) > 0.05:
             # Only warn if the difference is significant (more than 5 paise)
             report.add_warning(
                 f"Invoice value ({invoice_value}) differs from sum of taxable + taxes ({expected_value}) "

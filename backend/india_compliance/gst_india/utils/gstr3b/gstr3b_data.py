@@ -76,7 +76,7 @@ def is_inter_state(company_gstin: str, place_of_supply: str) -> bool:
 
 
 def get_invoice_totals(invoice: Dict[str, Any]) -> Dict[str, float]:
-    """Calculate total amounts from invoice items."""
+    """Calculate total amounts from invoice items or a flat record."""
     totals = {
         "taxable_value": 0.0,
         "igst_amount": 0.0,
@@ -85,12 +85,31 @@ def get_invoice_totals(invoice: Dict[str, Any]) -> Dict[str, float]:
         "cess_amount": 0.0,
         "total_tax": 0.0,
     }
-    for item in invoice.get("items", []):
-        totals["taxable_value"] += flt(item.get("taxable_value"))
-        totals["igst_amount"] += flt(item.get("igst_amount"))
-        totals["cgst_amount"] += flt(item.get("cgst_amount"))
-        totals["sgst_amount"] += flt(item.get("sgst_amount"))
-        totals["cess_amount"] += flt(item.get("cess_amount"))
+    
+    # Handle GSTN schema (from generate_gstr1_tables)
+    if "itms" in invoice:
+        for item in invoice.get("itms", []):
+            totals["taxable_value"] += flt(item.get("txval"))
+            totals["igst_amount"] += flt(item.get("iamt"))
+            totals["cgst_amount"] += flt(item.get("camt"))
+            totals["sgst_amount"] += flt(item.get("samt"))
+            totals["cess_amount"] += flt(item.get("csamt"))
+    # Handle ERP Nested Format
+    elif "items" in invoice:
+        for item in invoice.get("items", []):
+            totals["taxable_value"] += flt(item.get("taxable_value"))
+            totals["igst_amount"] += flt(item.get("igst_amount"))
+            totals["cgst_amount"] += flt(item.get("cgst_amount"))
+            totals["sgst_amount"] += flt(item.get("sgst_amount"))
+            totals["cess_amount"] += flt(item.get("cess_amount"))
+    # Handle Flat Schema, or GSTN flat table elements (B2CL, B2CS)
+    else:
+        totals["taxable_value"] += flt(invoice.get("taxable_value", invoice.get("txval", 0)))
+        totals["igst_amount"] += flt(invoice.get("igst_amount", invoice.get("igst", invoice.get("iamt", 0))))
+        totals["cgst_amount"] += flt(invoice.get("cgst_amount", invoice.get("cgst", invoice.get("camt", 0))))
+        totals["sgst_amount"] += flt(invoice.get("sgst_amount", invoice.get("sgst", invoice.get("samt", 0))))
+        totals["cess_amount"] += flt(invoice.get("cess_amount", invoice.get("cess", invoice.get("csamt", 0))))
+
     totals["total_tax"] = (
         totals["igst_amount"]
         + totals["cgst_amount"]
@@ -490,13 +509,16 @@ def generate_gstr3b_summary_v2(
     # Process B2B Invoices (Registered Persons)
     # B2B invoices go to Section 3.1(a)
     # -------------------------------------------------------------------------
-    for invoice in data.get("b2b", []):
-        totals = get_invoice_totals(invoice)
-        section_3_1a["taxable_value"] += totals["taxable_value"]
-        section_3_1a["igst_amount"] += totals["igst_amount"]
-        section_3_1a["cgst_amount"] += totals["cgst_amount"]
-        section_3_1a["sgst_amount"] += totals["sgst_amount"]
-        section_3_1a["cess_amount"] += totals["cess_amount"]
+    for customer in data.get("b2b", []):
+        # Handle GSTN schema where B2B is grouped by CTIN into 'invoices' array
+        invoices = customer.get("invoices", [customer]) if "invoices" in customer else [customer]
+        for invoice in invoices:
+            totals = get_invoice_totals(invoice)
+            section_3_1a["taxable_value"] += totals["taxable_value"]
+            section_3_1a["igst_amount"] += totals["igst_amount"]
+            section_3_1a["cgst_amount"] += totals["cgst_amount"]
+            section_3_1a["sgst_amount"] += totals["sgst_amount"]
+            section_3_1a["cess_amount"] += totals["cess_amount"]
     
     # -------------------------------------------------------------------------
     # Process B2CL Invoices (B2C Large, >₹2.5 lakh)
@@ -519,7 +541,7 @@ def generate_gstr3b_summary_v2(
     # -------------------------------------------------------------------------
     for invoice in data.get("b2cs", []):
         totals = get_invoice_totals(invoice)
-        place_of_supply = invoice.get("place_of_supply", "")
+        place_of_supply = invoice.get("place_of_supply", invoice.get("pos", ""))
         
         # Add all B2CS to Section 3.1(a)
         section_3_1a["taxable_value"] += totals["taxable_value"]
@@ -540,7 +562,7 @@ def generate_gstr3b_summary_v2(
     # Process Export Invoices (Zero-Rated Supplies)
     # Exports go to Section 3.1(b)
     # -------------------------------------------------------------------------
-    for invoice in data.get("export", []):
+    for invoice in data.get("exp", data.get("export", [])):
         totals = get_invoice_totals(invoice)
         section_3_1b["taxable_value"] += totals["taxable_value"]
         section_3_1b["igst_amount"] += totals["igst_amount"]
@@ -552,13 +574,15 @@ def generate_gstr3b_summary_v2(
     # Process CDNR (Credit/Debit Notes for Registered Persons)
     # CDNR goes to Section 3.1(c)
     # -------------------------------------------------------------------------
-    for invoice in data.get("cdnr", []):
-        totals = get_invoice_totals(invoice)
-        section_3_1c["taxable_value"] += totals["taxable_value"]
-        section_3_1c["igst_amount"] += totals["igst_amount"]
-        section_3_1c["cgst_amount"] += totals["cgst_amount"]
-        section_3_1c["sgst_amount"] += totals["sgst_amount"]
-        section_3_1c["cess_amount"] += totals["cess_amount"]
+    for customer in data.get("cdnr", []):
+        notes = customer.get("notes", [customer]) if "notes" in customer else [customer]
+        for invoice in notes:
+            totals = get_invoice_totals(invoice)
+            section_3_1c["taxable_value"] += totals["taxable_value"]
+            section_3_1c["igst_amount"] += totals["igst_amount"]
+            section_3_1c["cgst_amount"] += totals["cgst_amount"]
+            section_3_1c["sgst_amount"] += totals["sgst_amount"]
+            section_3_1c["cess_amount"] += totals["cess_amount"]
     
     # -------------------------------------------------------------------------
     # Process CDNUR (Credit/Debit Notes for Unregistered Persons)
