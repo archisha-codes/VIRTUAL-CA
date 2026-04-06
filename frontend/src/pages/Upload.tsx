@@ -192,25 +192,46 @@ export default function UploadPage() {
     setValidationErrors([]);
 
     try {
-      const parsed = await parseExcelFile(uploadedFile);
-      setParsedData(parsed);
+      // 1. Get highly accurate header parsing and auto-mapping from the compliance backend
+      const backendAnalysis = await getExcelColumns(uploadedFile);
       
-      // Auto-detect template type
-      const template = detectTemplate(parsed);
+      // 2. Extract sheet info for template detection using lightweight parsing
+      let sheets = ['Primary'];
+      let template = { type: 'unknown' as TemplateType, name: 'Detected Data', description: 'Data extracted by engine', sheets: ['Primary'] };
+      let category: InvoiceCategory = 'sales';
+      
+      try {
+        const parsed = await parseExcelFile(uploadedFile);
+        sheets = parsed.sheetNames;
+        template = detectTemplate(parsed);
+        category = detectCategory(parsed);
+      } catch (e) {
+        // If frontend parsing fails on messy data, rely entirely on backend
+        console.warn('Frontend parsing skipped, using backend data');
+      }
+
       setTemplateInfo(template);
+      setInvoiceCategory(category);
       
-      // Auto-detect category (sales vs purchase) and switch tabs
-      const detectedCategory = detectCategory(parsed);
-      setInvoiceCategory(detectedCategory);
+      setParsedData({
+        headers: backendAnalysis.columns,
+        rows: backendAnalysis.sample_data as any[],
+        sheetNames: sheets,
+      });
       
-      // Auto-map columns
-      const autoMapping = autoMapColumns(parsed.headers);
+      // 3. Apply the intelligent mapping suggestions from the backend engine
+      const autoMapping: Partial<ColumnMapping> = {};
+      if (backendAnalysis.suggested_mapping) {
+        Object.entries(backendAnalysis.suggested_mapping).forEach(([originalCol, canonicalField]) => {
+          autoMapping[canonicalField as keyof ColumnMapping] = originalCol;
+        });
+      }
       setColumnMapping(autoMapping);
       
       setStep('mapping');
       toast({
         title: 'File parsed successfully',
-        description: `Detected ${detectedCategory} data. Found ${parsed.rows.length} rows, ${parsed.headers.length} columns. Template: ${template.name}`,
+        description: `Backend verified ${backendAnalysis.column_count} columns. Template: ${template.name}`,
       });
     } catch (error) {
       toast({
@@ -323,10 +344,7 @@ export default function UploadPage() {
     const mapped: Record<string, string> = {};
     Object.entries(columnMapping).forEach(([key, colName]) => {
       if (colName && parsedData) {
-        const colIndex = parsedData.headers.indexOf(colName);
-        if (colIndex >= 0) {
-          mapped[key] = row[colIndex]?.toString() || '';
-        }
+        mapped[key] = row[colName]?.toString() || '';
       }
     });
     return mapped;

@@ -140,41 +140,49 @@ export interface ColumnMapping {
   invoice_number: string;
   invoice_date: string;
   customer_name: string;
-  customer_gstin: string;
+  gstin: string;
   place_of_supply: string;
   hsn_code: string;
   taxable_value: string;
-  cgst_rate: string;
-  cgst_amount: string;
-  sgst_rate: string;
-  sgst_amount: string;
-  igst_rate: string;
-  igst_amount: string;
-  total_amount: string;
+  rate: string;
+  cgst: string;
+  sgst: string;
+  igst: string;
+  cess: string;
+  invoice_value: string;
+  quantity: string;
+  uom: string;
+  document_type: string;
+  supply_type: string;
+  reverse_charge: string;
 }
 
 export const REQUIRED_FIELDS: (keyof ColumnMapping)[] = [
   'invoice_number',
   'invoice_date',
   'taxable_value',
-  'total_amount',
+  'invoice_value',
 ];
 
 export const FIELD_LABELS: Record<keyof ColumnMapping, string> = {
   invoice_number: 'Invoice Number',
   invoice_date: 'Invoice Date',
   customer_name: 'Customer Name',
-  customer_gstin: 'Customer GSTIN',
+  gstin: 'GSTIN',
   place_of_supply: 'Place of Supply',
   hsn_code: 'HSN Code',
   taxable_value: 'Taxable Value',
-  cgst_rate: 'CGST Rate (%)',
-  cgst_amount: 'CGST Amount',
-  sgst_rate: 'SGST Rate (%)',
-  sgst_amount: 'SGST Amount',
-  igst_rate: 'IGST Rate (%)',
-  igst_amount: 'IGST Amount',
-  total_amount: 'Total Amount',
+  rate: 'Tax Rate (%)',
+  cgst: 'CGST Amount',
+  sgst: 'SGST Amount',
+  igst: 'IGST Amount',
+  cess: 'CESS Amount',
+  invoice_value: 'Invoice Value / Total',
+  quantity: 'Quantity',
+  uom: 'Unit of Measure',
+  document_type: 'Document Type',
+  supply_type: 'Supply Type',
+  reverse_charge: 'Reverse Charge',
 };
 
 // Purchase invoice field labels (reusing same column mapping structure)
@@ -182,24 +190,28 @@ export const PURCHASE_REQUIRED_FIELDS: (keyof ColumnMapping)[] = [
   'invoice_number',
   'invoice_date',
   'taxable_value',
-  'total_amount',
+  'invoice_value',
 ];
 
 export const PURCHASE_FIELD_LABELS: Record<keyof ColumnMapping, string> = {
   invoice_number: 'Invoice Number',
   invoice_date: 'Invoice Date',
   customer_name: 'Supplier Name',
-  customer_gstin: 'Supplier GSTIN',
+  gstin: 'Supplier GSTIN',
   place_of_supply: 'Place of Supply',
   hsn_code: 'HSN Code',
   taxable_value: 'Taxable Value',
-  cgst_rate: 'CGST Rate (%)',
-  cgst_amount: 'CGST Amount',
-  sgst_rate: 'SGST Rate (%)',
-  sgst_amount: 'SGST Amount',
-  igst_rate: 'IGST Rate (%)',
-  igst_amount: 'IGST Amount',
-  total_amount: 'Total Amount',
+  rate: 'Tax Rate (%)',
+  cgst: 'CGST Amount',
+  sgst: 'SGST Amount',
+  igst: 'IGST Amount',
+  cess: 'CESS Amount',
+  invoice_value: 'Invoice Value / Total',
+  quantity: 'Quantity',
+  uom: 'Unit of Measure',
+  document_type: 'Document Type',
+  supply_type: 'Supply Type',
+  reverse_charge: 'Reverse Charge',
 };
 
 export async function parseExcelFile(file: File): Promise<ParsedExcel> {

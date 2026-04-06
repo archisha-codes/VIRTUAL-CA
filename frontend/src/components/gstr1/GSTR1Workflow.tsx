@@ -69,7 +69,7 @@ import {
   type ParsedExcel,
   type ExcelRow 
 } from '@/lib/excel-parser';
-import { processGSTR1Excel, apiExportGSTR1Excel, downloadExcelFromResponse, validateGSTR1, validateGSTR1File, saveGstr1State, getGstr1State, deleteGstr1State, type GSTR1ProcessResponse } from '@/lib/api';
+import { processGSTR1Excel, apiExportGSTR1Excel, downloadExcelFromResponse, validateGSTR1, validateGSTR1File, saveGstr1State, getGstr1State, deleteGstr1State, getExcelColumns, type GSTR1ProcessResponse } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -887,6 +887,9 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
     }
 
     try {
+      // 1. Get highly accurate header parsing and auto-mapping from the compliance backend
+      const backendAnalysis = await getExcelColumns(uploadedFile);
+
       let parsed: ParsedExcel;
       
       if (isLargeFile) {
@@ -894,14 +897,27 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
         parsed = await processLargeExcelFile(uploadedFile, (processed, total) => {
           setParseProgress({ processed, total });
         });
+        if (backendAnalysis.columns && backendAnalysis.columns.length > 0) {
+          parsed.headers = backendAnalysis.columns;
+        }
       } else {
         // Use regular parsing for small files
         parsed = await parseExcelFile(uploadedFile);
+        if (backendAnalysis.columns && backendAnalysis.columns.length > 0) {
+          parsed.headers = backendAnalysis.columns;
+          parsed.rows = backendAnalysis.sample_data as any[];
+        }
       }
       
       setParsedData(parsed);
       
-      const autoMapping = autoMapColumns(parsed.headers);
+      // 3. Apply the intelligent mapping suggestions from the backend engine
+      const autoMapping: Partial<ColumnMapping> = {};
+      if (backendAnalysis.suggested_mapping) {
+        Object.entries(backendAnalysis.suggested_mapping).forEach(([originalCol, canonicalField]) => {
+          autoMapping[canonicalField as keyof ColumnMapping] = originalCol;
+        });
+      }
       setColumnMapping(autoMapping);
       
       setStepData(prev => ({ ...prev, upload: { file: uploadedFile.name, rows: parsed.rows.length } }));

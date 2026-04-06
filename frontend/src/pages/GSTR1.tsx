@@ -125,6 +125,7 @@ export default function GSTR1Page() {
     <GSTR1Workflow 
       gstin={gstin}
       returnPeriod={period}
+      initialStep={(navigationState?.step as any) || 'upload'}
     />
   );
 }

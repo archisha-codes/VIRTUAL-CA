@@ -327,20 +327,21 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
   // Handle validate
   const handleValidate = () => {
     if (businesses.length === 0) {
-      toast({
-        title: 'No Data',
-        description: 'Please import data first',
-        variant: 'destructive',
+      navigate('/gst/gstr1/prepare', { 
+        state: { 
+          gstin, 
+          returnPeriod, 
+          step: 'upload'
+        } 
       });
       return;
     }
-    // Navigate to validation step in workflow
+    // Navigate to classification step in workflow
     navigate('/gst/gstr1/prepare', { 
       state: { 
         gstin, 
         returnPeriod, 
-        fromDrawer: true,
-        step: 'validation'
+        step: 'classification'
       } 
     });
   };
@@ -510,6 +511,7 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
           setselectedSummaryGstin(gstin);
           setselectedSummaryBusinessName(businessName);
         }}
+        returnPeriod={returnPeriod}
       />
     </div>
   );

@@ -766,82 +766,27 @@ export default function GSTR1SummaryDrawer({
         return calculateInvoiceSectionData(items.flatMap((item) => asItems(item.notes)));
       }
 
-      const hasPreAggregatedValues = ['docCount', 'doc_count', 'totalAmount', 'total_amount', 'taxableAmount', 'taxable_value', 'totalTax', 'total_tax', 'txval', 'iamt', 'camt', 'samt', 'csamt']
-        .some((key) => firstItem[key] !== undefined && firstItem[key] !== null);
-
-      if ('expt_amt' in firstItem || 'nil_amt' in firstItem || 'ngsup_amt' in firstItem) {
-        const exptAmt = normalizeNumericValue(firstItem.expt_amt);
-        const nilAmt = normalizeNumericValue(firstItem.nil_amt);
-        const nonGstAmt = normalizeNumericValue(firstItem.ngsup_amt);
-        const totalAmount = exptAmt + nilAmt + nonGstAmt;
-
-        return {
-          docCount: String(normalizeNumericValue(firstItem.inv?.length ?? firstItem.docCount ?? firstItem.doc_count ?? 0)),
-          totalAmount: formatNumber(totalAmount),
-          taxableAmount: formatNumber(totalAmount),
-          totalTax: '0.00',
-          igst: '0.00',
-          cgst: '0.00',
-          sgst: '0.00',
-          cess: '0.00'
-        };
-      }
-
-      if ('document_summary' in firstItem || 'total_documents' in firstItem) {
-        const docSummary = firstItem.document_summary || {};
-        const totalDocuments = normalizeNumericValue(
-          firstItem.total_documents ??
-          firstItem.totalDocuments ??
-          Object.values(docSummary).reduce((acc: number, value) => acc + normalizeNumericValue(value), 0)
-        );
-
-        return {
-          docCount: String(totalDocuments),
-          totalAmount: '0.00',
-          taxableAmount: '0.00',
-          totalTax: '0.00',
-          igst: '0.00',
-          cgst: '0.00',
-          sgst: '0.00',
-          cess: '0.00'
-        };
-      }
-
-      if (hasPreAggregatedValues) {
-        const docCount = normalizeNumericValue(firstItem.docCount ?? firstItem.doc_count ?? firstItem.count ?? items.length);
-        const taxable = normalizeNumericValue(firstItem.taxableAmount ?? firstItem.taxable_value ?? firstItem.txval ?? firstItem.taxable);
-        const igst = normalizeNumericValue(firstItem.igst ?? firstItem.igst_amount ?? firstItem.iamt);
-        const cgst = normalizeNumericValue(firstItem.cgst ?? firstItem.cgst_amount ?? firstItem.camt);
-        const sgst = normalizeNumericValue(firstItem.sgst ?? firstItem.sgst_amount ?? firstItem.samt);
-        const cess = normalizeNumericValue(firstItem.cess ?? firstItem.cess_amount ?? firstItem.csamt);
-        const totalTax = normalizeNumericValue(firstItem.totalTax ?? firstItem.total_tax) || (igst + cgst + sgst);
-        const totalAmount = normalizeNumericValue(firstItem.totalAmount ?? firstItem.total_amount) || (taxable + totalTax);
-
-        return {
-          docCount: String(docCount),
-          totalAmount: formatNumber(totalAmount),
-          taxableAmount: formatNumber(taxable),
-          totalTax: formatNumber(totalTax),
-          igst: formatNumber(igst),
-          cgst: formatNumber(cgst),
-          sgst: formatNumber(sgst),
-          cess: formatNumber(cess)
-        };
-      }
-
       // Sum from items - support multiple field name formats
+      // Calculate docCount: sum up docCount if available, otherwise use items.length
+      const totalDocs = items.reduce((sum, item) => {
+          const count = normalizeNumericValue(getRowValue(item, ['docCount', 'doc_count', 'count', 'total_documents', 'totalDocuments']));
+          return sum + (count || 1);
+      }, 0);
+
       const taxable = sumAmounts(items, ['txval', 'taxable_value', 'taxableValue', 'taxableAmount', 'taxable']);
       const igst = sumAmounts(items, ['iamt', 'igst_amount', 'igst']);
       const cgst = sumAmounts(items, ['camt', 'cgst_amount', 'cgst']);
       const sgst = sumAmounts(items, ['samt', 'sgst_amount', 'sgst']);
       const cess = sumAmounts(items, ['csamt', 'cess_amount', 'cess']);
       
-      // Total amount = taxable + all taxes
+      const explicitTotal = sumAmounts(items, ['val', 'totalAmount', 'total_amount', 'amount', 'invoiceValue', 'invoice_value', 'noteValue', 'note_value']);
+      
       const totalTax = igst + cgst + sgst;
-      const totalAmount = taxable + totalTax;
+      // Total amount = explicit total if provided, otherwise derived
+      const totalAmount = explicitTotal || (taxable + totalTax);
 
       return {
-        docCount: items.length.toString(),
+        docCount: totalDocs.toString(),
         totalAmount: formatNumber(totalAmount),
         taxableAmount: formatNumber(taxable),
         totalTax: formatNumber(totalTax),
@@ -893,6 +838,11 @@ export default function GSTR1SummaryDrawer({
     };
   };
 
+  const formatVal = (val: string | undefined): string => {
+    if (!val || val === '0' || val === '0.00' || val === '0.0') return '-';
+    return val;
+  };
+
   const renderRow = (
     item: any,
     depth = 0,
@@ -918,14 +868,14 @@ export default function GSTR1SummaryDrawer({
             )}
             <span className={depth > 0 ? "text-slate-600" : "font-medium"}>{item.name}</span>
           </td>
-          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? data.docCount : ''}</td>
-          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? data.totalAmount : ''}</td>
-          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? data.taxableAmount : ''}</td>
-          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? data.totalTax : ''}</td>
-          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? data.igst : ''}</td>
-          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? data.cgst : ''}</td>
-          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? data.sgst : ''}</td>
-          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? data.cess : ''}</td>
+          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? formatVal(data.docCount) : ''}</td>
+          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? formatVal(data.totalAmount) : ''}</td>
+          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? formatVal(data.taxableAmount) : ''}</td>
+          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? formatVal(data.totalTax) : ''}</td>
+          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? formatVal(data.igst) : ''}</td>
+          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? formatVal(data.cgst) : ''}</td>
+          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? formatVal(data.sgst) : ''}</td>
+          <td className="py-3 px-4 text-sm text-center text-slate-700">{!isGroup ? formatVal(data.cess) : ''}</td>
           <td className="py-3 px-4 text-sm text-center">
             <button
               onClick={() => handleViewSection(item.name, toggleFn === toggleAmendmentGroup ? 'amendments' : (toggleFn === toggleSummaryGroup ? 'summaries' : 'grouped'))}

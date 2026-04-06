@@ -517,7 +517,7 @@ export async function pingBackend(): Promise<{ ping: string; timestamp: string }
  */
 export async function getExcelColumns(
   file: File
-): Promise<{ columns: string[]; column_count: number; sample_data: Record<string, unknown>[] }> {
+): Promise<{ columns: string[]; column_count: number; suggested_mapping: Record<string, string>; sample_data: Record<string, unknown>[] }> {
   const formData = new FormData();
   formData.append('file', file);
 
@@ -539,6 +539,7 @@ export async function getExcelColumns(
  */
 export interface GSTR1ProcessResponse {
   success: boolean;
+  message?: string;
   data: {
     summary: {
       total_taxable_value: number;
