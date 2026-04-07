@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: virtual-ca-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Application Settings
+      - ENV=${ENV:-production}
+      - APP_NAME=GSTR Compliance Backend
+      - APP_VERSION=1.1.0
+      
+      # JWT Authentication
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      - JWT_ALGORITHM=HS256
+      - JWT_EXPIRE_MINUTES=1440
+      
+      # API Key
+      - GST_API_KEY=${GST_API_KEY:-gst-secret-key-change-in-production}
+      - API_KEY_NAME=X-API-Key
+      
+      # Rate Limiting
+      - RATE_LIMIT_REQUESTS_PER_MINUTE=${RATE_LIMIT_REQUESTS_PER_MINUTE:-60}
+      
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=json
+      - LOG_DIR=/app/logs
+      
+      # File Upload Settings
+      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-10}
+      - UPLOAD_DIR=/tmp/uploads
+      - TEMP_DIR=/tmp
+      
+      # Database
+      - DATABASE_TYPE=sqlite
+      
+      # CORS
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - CORS_ALLOW_CREDENTIALS=true
+      
+      # Frontend URL
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      
+      # Session
+      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY:-session-secret-change-in-production}
+      
+      # Redis (optional)
+      # - REDIS_URL=${REDIS_URL}
+    volumes:
+      # Mount logs directory for persistence
+      - ./backend/logs:/app/logs
+      
+      # Mount uploads directory for file persistence
+      - ./backend/uploads:/tmp/uploads
+      
+      # Mount .env file if it exists
+      - ./backend/.env:/app/.env:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - virtual-ca-network
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: virtual-ca-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=${FRONTEND_URL:-http://localhost:8000}
+    depends_on:
+      - backend
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    networks:
+      - virtual-ca-network
+
+networks:
+  virtual-ca-network:
+    name: virtual-ca-network
+    driver: bridge
+
+volumes:
+  logs:
+  uploads:
