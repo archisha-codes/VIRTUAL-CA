@@ -591,13 +591,33 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
       const unifiedData = transformAllBackendData(uploadResult.data);
       setGstr1Data(unifiedData);
       
-      // Calculate summary from unified data
-      const summary = calculateSummary(unifiedData);
+      // Use summary directly from backend calculations instead of recalculating
+      const backendSummary = uploadResult.data.summary || {};
+      const summary: GSTR1Summary = {
+        totalInvoices: backendSummary.total_invoices || backendSummary.totalInvoices || 0,
+        totalTaxableValue: backendSummary.total_taxable_value || backendSummary.totalTaxableValue || 0,
+        totalTax: (backendSummary.total_igst || 0) + (backendSummary.total_cgst || 0) + (backendSummary.total_sgst || 0) + (backendSummary.total_cess || 0),
+        b2bCount: backendSummary.b2b_count || backendSummary.b2bCount || 0,
+        b2clCount: backendSummary.b2cl_count || backendSummary.b2clCount || 0,
+        b2csCount: backendSummary.b2cs_count || backendSummary.b2csCount || 0,
+        exportCount: backendSummary.exp_count || backendSummary.exportCount || 0,
+        cdnrCount: backendSummary.cdnr_count || backendSummary.cdnrCount || 0,
+        cndsCount: backendSummary.cnds_count || backendSummary.cndsCount || 0,
+        hsnCount: backendSummary.hsn_count || backendSummary.hsnCount || 0
+      };
       setGstr1Summary(summary);
       
-      // Validate all rows
-      const errorsMap = validateAllRows(unifiedData);
-      setValidationErrorsMap(errorsMap);
+      // Use validations directly from backend instead of local rules
+      const errorsMap = new Map<number, string[]>();
+      if (uploadResult.validation_report && uploadResult.validation_report.errors) {
+         // Optionally you could map backend errors to rows here if the backend structure supports it
+         console.log('[DEBUG] Setting validation map from backend data:', uploadResult.validation_report.errors.length, 'errors');
+         // We do not override with validateAllRows to ensure we show backend validations
+      } else {
+         const localErrorsMap = validateAllRows(unifiedData);
+         errorsMap.forEach((v, k) => localErrorsMap.set(k, v));
+         setValidationErrorsMap(localErrorsMap);
+      }
       
       console.log('[DEBUG] Single Source of Truth set:', {
         totalRows: unifiedData.length,

@@ -11,11 +11,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { 
-  FileText, 
-  Calculator, 
-  BarChart3, 
-  ArrowRight, 
+import {
+  FileText,
+  Calculator,
+  BarChart3,
+  ArrowRight,
   FileCheck,
   FileDiff,
   Building2,
@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useDashboardService, DashboardData, FormModule } from '@/services/dashboardService';
+import GSTR3BDrawerFlow from '@/components/gstr3b/GSTR3BDrawerFlow';
 
 // Filing module types
 interface FilingModule {
@@ -127,7 +128,7 @@ function FilingModuleCard({ module, onClick }: FilingModuleCardProps) {
   const status = statusConfig[module.status];
 
   return (
-    <Card 
+    <Card
       className="shadow-card hover:shadow-card-hover hover:scale-[1.02] transition-all duration-300 cursor-pointer group border-0 bg-white dark:bg-slate-800"
       onClick={onClick}
     >
@@ -178,6 +179,7 @@ export default function GSTForms() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedPeriod, setSelectedPeriod] = useState<string>('');
+  const [isGSTR3BDrawerOpen, setIsGSTR3BDrawerOpen] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -193,7 +195,7 @@ export default function GSTForms() {
       ]);
       setDashboardData(data);
       setFormModules(forms || []);
-      
+
       // Set current period
       const now = new Date();
       const month = (now.getMonth() + 1).toString().padStart(2, '0');
@@ -209,16 +211,16 @@ export default function GSTForms() {
   };
 
   // Filter modules by category from backend data
-  const monthlyModules = formModules.filter(m => 
+  const monthlyModules = formModules.filter(m =>
     ['gstr1', 'gstr3b', 'gstr2b'].includes(m.id) && m.enabled
   );
-  const annualModules = formModules.filter(m => 
+  const annualModules = formModules.filter(m =>
     ['gstr9', 'gstr9c'].includes(m.id) && m.enabled
   );
-  const otherModules = formModules.filter(m => 
+  const otherModules = formModules.filter(m =>
     ['gstr6', 'gstr7', 'gstr8', 'cmp08', 'itc04'].includes(m.id) && m.enabled
   );
-  const reconciliationModules = formModules.filter(m => 
+  const reconciliationModules = formModules.filter(m =>
     ['einv-sr', '2a-pr', '2b-pr'].includes(m.id) && m.enabled
   );
 
@@ -258,8 +260,8 @@ export default function GSTForms() {
                 </div>
               </div>
               <div className="flex gap-2">
-                <Button 
-                  variant="secondary" 
+                <Button
+                  variant="secondary"
                   size="sm"
                   className="bg-white/20 hover:bg-white/30 text-white border-0"
                   onClick={() => navigate('/settings')}
@@ -274,20 +276,19 @@ export default function GSTForms() {
 
         {/* Filing Status Quick View */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card className={`shadow-sm ${
-            filingStatus.gstr1.status === 'filed' 
+          <Card className={`shadow-sm ${filingStatus.gstr1.status === 'filed'
               ? 'bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-800'
               : filingStatus.gstr1.status === 'available'
                 ? 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800'
                 : 'bg-yellow-50 border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-800'
-          }`}>
+            }`}>
             <CardContent className="py-4">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-slate-600 dark:text-slate-400">GSTR-1</p>
                   <p className="text-lg font-bold text-slate-900 dark:text-slate-100">
-                    {filingStatus.gstr1.status === 'filed' ? 'Filed' : 
-                     filingStatus.gstr1.status === 'available' ? 'Ready' : 'Pending'}
+                    {filingStatus.gstr1.status === 'filed' ? 'Filed' :
+                      filingStatus.gstr1.status === 'available' ? 'Ready' : 'Pending'}
                   </p>
                   {filingStatus.gstr1.filed_date && (
                     <p className="text-xs text-slate-500">Filed: {filingStatus.gstr1.filed_date}</p>
@@ -302,20 +303,19 @@ export default function GSTForms() {
             </CardContent>
           </Card>
 
-          <Card className={`shadow-sm ${
-            filingStatus.gstr3b.status === 'filed' 
+          <Card className={`shadow-sm ${filingStatus.gstr3b.status === 'filed'
               ? 'bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-800'
               : filingStatus.gstr3b.status === 'available'
                 ? 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800'
                 : 'bg-yellow-50 border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-800'
-          }`}>
+            }`}>
             <CardContent className="py-4">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-slate-600 dark:text-slate-400">GSTR-3B</p>
                   <p className="text-lg font-bold text-slate-900 dark:text-slate-100">
-                    {filingStatus.gstr3b.status === 'filed' ? 'Filed' : 
-                     filingStatus.gstr3b.status === 'available' ? 'Ready' : 'Pending'}
+                    {filingStatus.gstr3b.status === 'filed' ? 'Filed' :
+                      filingStatus.gstr3b.status === 'available' ? 'Ready' : 'Pending'}
                   </p>
                   {filingStatus.gstr3b.filed_date && (
                     <p className="text-xs text-slate-500">Filed: {filingStatus.gstr3b.filed_date}</p>
@@ -330,11 +330,10 @@ export default function GSTForms() {
             </CardContent>
           </Card>
 
-          <Card className={`shadow-sm ${
-            filingStatus.gstr2b.status === 'available' 
+          <Card className={`shadow-sm ${filingStatus.gstr2b.status === 'available'
               ? 'bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800'
               : 'bg-slate-50 border-slate-200 dark:bg-slate-800 dark:border-slate-700'
-          }`}>
+            }`}>
             <CardContent className="py-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -343,11 +342,10 @@ export default function GSTForms() {
                     {filingStatus.gstr2b.status === 'available' ? 'Available' : 'Not Available'}
                   </p>
                 </div>
-                <RefreshCw className={`h-8 w-8 ${
-                  filingStatus.gstr2b.status === 'available' 
-                    ? 'text-purple-600' 
+                <RefreshCw className={`h-8 w-8 ${filingStatus.gstr2b.status === 'available'
+                    ? 'text-purple-600'
                     : 'text-slate-400'
-                }`} />
+                  }`} />
               </div>
             </CardContent>
           </Card>
@@ -386,7 +384,13 @@ export default function GSTForms() {
                         frequency: module.frequency,
                         status: 'pending' as const
                       }}
-                      onClick={() => navigate(module.path)}
+                      onClick={() => {
+                        if (module.id === 'gstr3b') {
+                          setIsGSTR3BDrawerOpen(true);
+                        } else {
+                          navigate(module.path);
+                        }
+                      }}
                     />
                   );
                 })}
@@ -546,6 +550,18 @@ export default function GSTForms() {
           </CardContent>
         </Card>
       </div>
+
+      <GSTR3BDrawerFlow
+        open={isGSTR3BDrawerOpen}
+        onOpenChange={setIsGSTR3BDrawerOpen}
+        onContinue={(gstins, period) => {
+          setIsGSTR3BDrawerOpen(false);
+          // Navigate to GSTR3B passing the selected info
+          navigate('/gstr3b', {
+            state: { gstin: gstins[0], returnPeriod: period, fromDrawer: true }
+          });
+        }}
+      />
     </DashboardLayout>
   );
 }

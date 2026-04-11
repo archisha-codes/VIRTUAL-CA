@@ -14,13 +14,13 @@ import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { 
-  Download, 
-  RefreshCw, 
-  FileDown, 
-  Upload, 
-  ArrowRight, 
-  CheckCircle, 
+import {
+  Download,
+  RefreshCw,
+  FileDown,
+  Upload,
+  ArrowRight,
+  CheckCircle,
   Loader2,
   FileText,
   Filter,
@@ -37,15 +37,20 @@ import GSTR3BActionsDropdown from '@/components/gstr3b/GSTR3BActionsDropdown';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import type { GSTR1ProcessResponse, GSTR3BProcessResponse, apiExportGSTR3BExcel } from '@/lib/api';
-import { 
-  transformBackendB2BToFrontend, 
-  transformBackendB2CLToFrontend, 
+import {
+  transformBackendB2BToFrontend,
+  transformBackendB2CLToFrontend,
   transformBackendB2CSToFrontend,
   transformBackendExportToFrontend,
 } from '@/lib/gstr-transform';
 import { calculateGSTR3BFromGSTR1, type GSTR3BData } from '@/hooks/useGSTR3BData';
 import { useLocation, useNavigate } from 'react-router-dom';
 import GSTR3BDrawerFlow from '@/components/gstr3b/GSTR3BDrawerFlow';
+import GSTR3BPrepareTable from '@/components/gstr3b/GSTR3BPrepareTable';
+import GSTR3BDataAvailabilityDrawer from '@/components/gstr3b/GSTR3BDataAvailabilityDrawer';
+import GSTR3BPreparedModal from '@/components/gstr3b/GSTR3BPreparedModal';
+import GSTR3BImportFlow from '@/components/gstr3b/GSTR3BImportFlow';
+import { ExternalLink } from 'lucide-react';
 
 // Step types
 type GSTR3BStep = 'fetch' | 'review' | 'compute' | 'summary' | 'export';
@@ -82,19 +87,20 @@ export default function GSTR3BPage() {
   const { currentOrganization, currentGstProfile } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  
+
   // Get GSTIN from AuthContext or use default
   const defaultGstin = currentGstProfile?.gstin || '';
   const workspaceId = currentOrganization?.id;
-  
+
   // Drawer Flow state
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [isDrawerComplete, setIsDrawerComplete] = useState(false);
-  
+  const [isDataAvailabilityDrawerOpen, setIsDataAvailabilityDrawerOpen] = useState(false);
+
   // Navigation state
   const navigationState = location.state as any;
   const hasExistingState = navigationState?.gstin && navigationState?.returnPeriod;
-  
+
   // If we have existing state from navigation, use it directly
   useEffect(() => {
     if (hasExistingState && navigationState.fromDrawer) {
@@ -105,15 +111,17 @@ export default function GSTR3BPage() {
       }));
       setDrawerOpen(false);
       setIsDrawerComplete(true);
+      // Automatically show the data availability drawer when coming from the selection flow
+      setIsDataAvailabilityDrawerOpen(true);
     }
   }, [hasExistingState, navigationState]);
-  
+
   // Current step
   const [currentStep, setCurrentStep] = useState<GSTR3BStep>('fetch');
-  
+
   // Processing state
   const [isProcessing, setIsProcessing] = useState(false);
-  
+
   // Filters
   const [filters, setFilters] = useState<Filters>({
     gstin: defaultGstin,
@@ -126,6 +134,27 @@ export default function GSTR3BPage() {
   const [uploadResult, setUploadResult] = useState<GSTR1ProcessResponse | null>(null);
   const [gstr3bData, setGstr3bData] = useState<GSTR3BData | null>(null);
   
+  // Prepared Modal state
+  const [isPreparedModalOpen, setIsPreparedModalOpen] = useState(false);
+  const [selectedPreviewGstin, setSelectedPreviewGstin] = useState<string | null>(null);
+
+  // Import flow state
+  const [isImportFlowOpen, setIsImportFlowOpen] = useState(false);
+  useEffect(() => {
+    const handleOpenModal = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail && customEvent.detail.gstin) {
+        setSelectedPreviewGstin(customEvent.detail.gstin);
+        setIsPreparedModalOpen(true);
+      }
+    };
+
+    window.addEventListener('openGSTR3BModal', handleOpenModal);
+    return () => {
+      window.removeEventListener('openGSTR3BModal', handleOpenModal);
+    };
+  }, []);
+
   // Current step index
   const currentStepIndex = workflowSteps.findIndex(s => s.id === currentStep);
 
@@ -147,11 +176,11 @@ export default function GSTR3BPage() {
   useEffect(() => {
     const fetchSavedState = async () => {
       if (!workspaceId || !filters.gstin) return;
-      
+
       try {
         const { getGstr3bState } = await import('@/lib/api');
         const response = await getGstr3bState(workspaceId, filters.gstin, filters.returnPeriod);
-        
+
         if (response.success && response.data) {
           // Restore saved state from backend
           if (response.data.gstr1_data) {
@@ -170,25 +199,25 @@ export default function GSTR3BPage() {
         // Silently fail - user can still start fresh
       }
     };
-    
+
     fetchSavedState();
   }, [workspaceId, filters.gstin, filters.returnPeriod]);
 
   // Transform backend data
   const gstr1Data = uploadResult?.data;
-  
+
   const b2bData = gstr1Data?.b2b && Array.isArray(gstr1Data.b2b) && gstr1Data.b2b.length > 0
     ? transformBackendB2BToFrontend(gstr1Data.b2b as any)
     : [];
-  
+
   const b2clData = gstr1Data?.b2cl && Array.isArray(gstr1Data.b2cl) && gstr1Data.b2cl.length > 0
     ? transformBackendB2CLToFrontend(gstr1Data.b2cl as any)
     : [];
-  
+
   const b2csData = gstr1Data?.b2cs && Array.isArray(gstr1Data.b2cs) && gstr1Data.b2cs.length > 0
     ? transformBackendB2CSToFrontend(gstr1Data.b2cs as any)
     : [];
-  
+
   const exportData = gstr1Data?.exp && Array.isArray(gstr1Data.exp) && gstr1Data.exp.length > 0
     ? transformBackendExportToFrontend(gstr1Data.exp as any)
     : [];
@@ -216,10 +245,10 @@ export default function GSTR3BPage() {
   const handleFetchData = async () => {
     setIsProcessing(true);
     setCurrentStep('review');
-    
+
     try {
       setError(null);
-      
+
       // Try to fetch from backend API
       if (workspaceId && filters.gstin) {
         const response = await fetch(
@@ -230,7 +259,7 @@ export default function GSTR3BPage() {
             }
           }
         );
-        
+
         if (response.ok) {
           const data = await response.json();
           if (data.gstr1_data) {
@@ -261,7 +290,7 @@ export default function GSTR3BPage() {
       } else {
         throw new Error('Workspace ID or GSTIN not available');
       }
-      
+
       toast({
         title: 'Data Fetched',
         description: 'Invoice data loaded from backend',
@@ -275,7 +304,7 @@ export default function GSTR3BPage() {
         variant: 'destructive',
       });
     }
-    
+
     setIsProcessing(false);
   };
 
@@ -283,7 +312,7 @@ export default function GSTR3BPage() {
   const handleRecalculate = async () => {
     setIsProcessing(true);
     setCurrentStep('compute');
-    
+
     try {
       // Call backend API for GSTR-3B computation
       if (workspaceId && filters.gstin) {
@@ -302,7 +331,7 @@ export default function GSTR3BPage() {
             })
           }
         );
-        
+
         if (response.ok) {
           const data = await response.json();
           // Transform backend response to GSTR3BData format
@@ -325,13 +354,13 @@ export default function GSTR3BPage() {
           return;
         }
       }
-      
+
       // Fallback to local calculation
       if (uploadResult) {
         const data = calculateGSTR3BFromGSTR1(gstr1ForCalc);
         setGstr3bData(data);
       }
-      
+
       toast({
         title: 'Tax Recalculated',
         description: 'Tax computation completed',
@@ -344,14 +373,14 @@ export default function GSTR3BPage() {
         setGstr3bData(data);
       }
     }
-    
+
     setIsProcessing(false);
   };
 
   // Handle export
   const handleExport = async () => {
     setIsProcessing(true);
-    
+
     try {
       // Call backend API for export
       const response = await fetch(
@@ -370,7 +399,7 @@ export default function GSTR3BPage() {
           })
         }
       );
-      
+
       if (response.ok) {
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
@@ -381,7 +410,7 @@ export default function GSTR3BPage() {
         a.click();
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
-        
+
         toast({
           title: 'Export Complete',
           description: 'GSTR-3B exported to Excel',
@@ -397,7 +426,7 @@ export default function GSTR3BPage() {
         variant: 'destructive',
       });
     }
-    
+
     setIsProcessing(false);
   };
 
@@ -421,7 +450,7 @@ export default function GSTR3BPage() {
           })
         }
       );
-      
+
       if (response.ok) {
         const data = await response.json();
         toast({
@@ -506,7 +535,7 @@ export default function GSTR3BPage() {
   // If we haven't completed the drawer flow yet, show the drawer
   if (!isDrawerComplete && drawerOpen && !hasExistingState) {
     return (
-      <GSTR3BDrawerFlow 
+      <GSTR3BDrawerFlow
         open={drawerOpen}
         onOpenChange={(open) => {
           if (!open) {
@@ -517,398 +546,124 @@ export default function GSTR3BPage() {
       />
     );
   }
+  // Map backend data to table format
+  const mappedBusinesses = [
+    {
+      id: "b1",
+      businessName: currentOrganization?.name || "Selected Business",
+      gstins: [
+        {
+          id: "g1",
+          gstin: filters.gstin || defaultGstin,
+          state: currentGstProfile?.state || filters.state || "Default State",
+          totalLiability: (gstr3bData?.outwardSupplies?.total?.igst || 0) + (gstr3bData?.outwardSupplies?.total?.cgst || 0) + (gstr3bData?.outwardSupplies?.total?.sgst || 0),
+          outwardSupplies: (gstr3bData?.outwardSupplies?.taxableValue || 0),
+          inwardSuppliesRCM: 0,
+          outwardSupplies95: 0,
+          netAvailableITC: (gstr3bData?.itcAvailable?.igst || 0) + (gstr3bData?.itcAvailable?.cgst || 0) + (gstr3bData?.itcAvailable?.sgst || 0),
+          interestLateFees: 0
+        }
+      ]
+    }
+  ];
 
   return (
     <DashboardLayout title="GSTR-3B">
-      <div className="space-y-4">
-        {/* ClearTax-style Top Alert Banner */}
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="h-5 w-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
-            <div>
-              <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
-                Data sources have been pre-applied from your previous session
-              </p>
-              <p className="text-sm text-blue-700 dark:text-blue-300 mt-1">
-                GSTR-1 data is being used for tax computation. You can modify data sources if needed.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Step 1/5: Prepare GSTR-3B</h1>
-            <p className="text-slate-500 dark:text-slate-400 mt-1">
-              GSTIN: <span className="font-mono">{filters.gstin || 'N/A'}</span> | Period: <span className="font-mono">{filters.returnPeriod || 'N/A'}</span>
+      <div className="flex-1 flex flex-col min-h-0 w-full overflow-hidden absolute inset-0 pt-4 px-6">
+        <div className="flex-none pt-2 pb-0">
+          {/* Header Area */}
+          <div className="mb-6">
+            <h1 className="text-[22px] font-medium text-slate-800 dark:text-slate-100 mb-1">Step 1/5: Prepare GSTR-3B</h1>
+            <p className="text-sm text-slate-500 flex items-center">
+              Discover how to use GSTR-3B with Clear. 
+              <button className="text-blue-600 hover:underline ml-1 flex items-center">
+                Learn More <ExternalLink className="h-3 w-3 ml-1" />
+              </button>
             </p>
           </div>
-          <div className="flex gap-3">
-            {/* Run 2B vs PR & Generate Table 4 Button */}
-            <Button 
-              variant="outline" 
-              className="gap-2 border-blue-300 text-blue-700 hover:bg-blue-50"
-              onClick={handleRecalculate}
-              disabled={!uploadResult || isProcessing}
-            >
-              <RefreshCw className={`h-4 w-4 ${isProcessing ? 'animate-spin' : ''}`} />
-              Run 2B vs PR & Generate Table 4
-            </Button>
-            
-            {/* Import File Button */}
-            <Button 
-              variant="outline" 
-              className="gap-2 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
-              onClick={() => {}}
-            >
-              <FilePlus className="h-4 w-4" />
-              Import File
-            </Button>
-            
-            {/* Actions Dropdown */}
-            <GSTR3BActionsDropdown />
-            
-            {/* Proceed to Next Step Button */}
-            <Button 
-              className="gap-2 bg-corporate-primary hover:bg-corporate-primaryHover"
-              onClick={() => {
-                // Move to next step
-                const nextStepIndex = currentStepIndex + 1;
-                if (nextStepIndex < workflowSteps.length) {
-                  setCurrentStep(workflowSteps[nextStepIndex].id as GSTR3BStep);
-                }
-              }}
-              disabled={currentStepIndex >= workflowSteps.length - 1}
-            >
-              Proceed to Next Step
-              <ArrowRight className="h-4 w-4 ml-1" />
-            </Button>
+
+          <div className="flex flex-col gap-4 mb-4">
+            {/* Info Banner Row */}
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-4">
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                Data sources have been pre-applied based on your previous filing. You may choose to edit these, and any updates will be automatically saved as your new preferences.
+              </p>
+              <button className="text-sm text-blue-600 hover:underline whitespace-nowrap ml-4">
+                Edit Data Sources
+              </button>
+            </div>
+
+            {/* Action Buttons Row */}
+            <div className="flex items-center justify-between pt-2">
+              <div className="flex items-center gap-4">
+                {/* Empty left side */}
+              </div>
+              <div className="flex items-center gap-3">
+                <Button 
+                  variant="outline" 
+                  className="gap-2 text-blue-600 border-blue-200 hover:bg-blue-50 font-medium text-sm h-8"
+                  onClick={() => setIsImportFlowOpen(true)}
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Import File
+                </Button>
+                <GSTR3BActionsDropdown />
+                <Button 
+                  variant="outline" 
+                  className="gap-2 text-blue-600 border-blue-200 hover:bg-blue-50 font-medium h-9"
+                  onClick={handleRecalculate}
+                  disabled={isProcessing}
+                >
+                  <RefreshCw className={`h-4 w-4 ${isProcessing ? 'animate-spin' : ''}`} />
+                  Run 2B vs PR & Generate Table 4
+                </Button>
+                <Button 
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-medium gap-2 px-6 h-9"
+                >
+                  Proceed to Next Step <ArrowRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Step Workflow */}
-        <Card className="shadow-sm bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <CardContent className="py-3">
-            <div className="flex items-center gap-2 overflow-x-auto">
-              {workflowSteps.map((step, index) => {
-                const StepIcon = step.icon;
-                return (
-                  <div key={step.id} className="flex items-center">
-                    <button
-                      onClick={() => gstr3bData && setCurrentStep(step.id as GSTR3BStep)}
-                      disabled={!gstr3bData && index > currentStepIndex}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors whitespace-nowrap ${
-                        index <= currentStepIndex 
-                          ? 'bg-corporate-primary text-white' 
-                          : gstr3bData 
-                            ? 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600' 
-                            : 'bg-slate-50 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed'
-                      }`}
-                    >
-                      {index < currentStepIndex ? (
-                        <CheckCircle className="h-4 w-4" />
-                      ) : (
-                        <StepIcon className="h-4 w-4" />
-                      )}
-                      {step.label}
-                    </button>
-                    {index < workflowSteps.length - 1 && (
-                      <ArrowRight className="h-4 w-4 mx-2 text-slate-300 dark:text-slate-600" />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Step Content */}
-        <div className="grid grid-cols-1 gap-4">
-          {/* Step 1: Fetch Data */}
-          {currentStep === 'fetch' && (
-            <Card className="shadow-sm bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg text-slate-900 dark:text-slate-100">Fetch Data</CardTitle>
-                <CardDescription className="text-slate-500 dark:text-slate-400">Retrieve invoice data from your records</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {/* Filter Panel */}
-                <div className="bg-slate-50 dark:bg-slate-700/50 rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Filter className="h-4 w-4 text-slate-500 dark:text-slate-400" />
-                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Filters</span>
-                  </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <Input 
-                      placeholder="GSTIN" 
-                      value={filters.gstin}
-                      onChange={(e) => setFilters({...filters, gstin: e.target.value})}
-                      className="h-9 bg-white dark:bg-slate-700 border-slate-200 dark:border-slate-600"
-                    />
-                    <Input 
-                      placeholder="Return Period (MMYYYY)" 
-                      value={filters.returnPeriod}
-                      onChange={(e) => setFilters({...filters, returnPeriod: e.target.value})}
-                      className="h-9 bg-white dark:bg-slate-700 border-slate-200 dark:border-slate-600"
-                    />
-                    <Input 
-                      placeholder="State" 
-                      value={filters.state}
-                      onChange={(e) => setFilters({...filters, state: e.target.value})}
-                      className="h-9 bg-white dark:bg-slate-700 border-slate-200 dark:border-slate-600"
-                    />
-                    <Input 
-                      placeholder="Invoice Type" 
-                      value={filters.invoiceType}
-                      onChange={(e) => setFilters({...filters, invoiceType: e.target.value})}
-                      className="h-9 bg-white dark:bg-slate-700 border-slate-200 dark:border-slate-600"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex flex-col items-center justify-center py-8">
-                  <Download className="h-16 w-16 text-corporate-primary mb-4" />
-                  <p className="text-lg font-medium text-slate-900 dark:text-slate-100">Ready to fetch data</p>
-                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 mb-4">
-                    Click the button below to fetch invoices for GSTR-3B
-                  </p>
-                  <Button 
-                    onClick={handleFetchData} 
-                    disabled={isProcessing}
-                    size="lg"
-                    className="bg-corporate-primary hover:bg-corporate-primaryHover"
-                  >
-                    {isProcessing ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Fetching...
-                      </>
-                    ) : (
-                      <>
-                        <Download className="mr-2 h-4 w-4" />
-                        Fetch Data
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Step 2: Review Supplies */}
-          {currentStep === 'review' && (
-            <Card className="shadow-sm bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg text-slate-900 dark:text-slate-100">Review Supplies</CardTitle>
-                <CardDescription className="text-slate-500 dark:text-slate-400">View sales and purchase summaries</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
-                        <th className="text-left py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">GSTIN</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">Invoice Count</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">Taxable Value</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">IGST</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">CGST</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">SGST</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {salesSummary.length > 0 ? (
-                        salesSummary.map((inv: any, idx: number) => (
-                          <tr key={idx} className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                            <td className="py-2 px-4 font-mono text-sm text-slate-700 dark:text-slate-300">{inv.gstin}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">{inv.invoiceCount}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{inv.taxableValue.toLocaleString()}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{inv.igst.toLocaleString()}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{inv.cgst.toLocaleString()}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{inv.sgst.toLocaleString()}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={6} className="py-8 text-center text-slate-500 dark:text-slate-400">
-                            No invoice data available. Please upload invoices first.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                    {salesSummary.length > 0 && (
-                      <tfoot>
-                        <tr className="bg-slate-50 dark:bg-slate-700/50 font-medium">
-                          <td className="py-3 px-4 text-slate-900 dark:text-slate-100">Total</td>
-                          <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">{salesSummary.reduce((a: any, b: any) => a + b.invoiceCount, 0)}</td>
-                          <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{salesSummary.reduce((a: any, b: any) => a + b.taxableValue, 0).toLocaleString()}</td>
-                          <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{salesSummary.reduce((a: any, b: any) => a + b.igst, 0).toLocaleString()}</td>
-                          <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{salesSummary.reduce((a: any, b: any) => a + b.cgst, 0).toLocaleString()}</td>
-                          <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{salesSummary.reduce((a: any, b: any) => a + b.sgst, 0).toLocaleString()}</td>
-                        </tr>
-                      </tfoot>
-                    )}
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Step 3: Tax Computation */}
-          {currentStep === 'compute' && (
-            <Card className="shadow-sm bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg text-slate-900 dark:text-slate-100">Tax Computation</CardTitle>
-                <CardDescription className="text-slate-500 dark:text-slate-400">Automatic tax calculation based on invoice data</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {isProcessing ? (
-                  <div className="flex flex-col items-center justify-center py-12">
-                    <Loader2 className="h-12 w-12 text-corporate-primary animate-spin mb-4" />
-                    <p className="text-lg font-medium text-slate-900 dark:text-slate-100">Computing tax...</p>
-                  </div>
-                ) : gstr3bData ? (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <Card className="bg-slate-50 dark:bg-slate-700/50 border-slate-200 dark:border-slate-700">
-                      <CardContent className="py-4">
-                        <p className="text-sm text-slate-500 dark:text-slate-400">Outward Tax</p>
-                        <p className="text-2xl font-bold text-red-600 dark:text-red-400">
-                          ₹{((gstr3bData.outwardSupplies?.total?.igst || 0) + 
-                             (gstr3bData.outwardSupplies?.total?.cgst || 0) + 
-                             (gstr3bData.outwardSupplies?.total?.sgst || 0)).toLocaleString()}
-                        </p>
-                      </CardContent>
-                    </Card>
-                    <Card className="bg-slate-50 dark:bg-slate-700/50 border-slate-200 dark:border-slate-700">
-                      <CardContent className="py-4">
-                        <p className="text-sm text-slate-500 dark:text-slate-400">ITC Available</p>
-                        <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                          ₹{((gstr3bData.itcAvailable?.igst || 0) + 
-                             (gstr3bData.itcAvailable?.cgst || 0) + 
-                             (gstr3bData.itcAvailable?.sgst || 0)).toLocaleString()}
-                        </p>
-                      </CardContent>
-                    </Card>
-                    <Card className="bg-slate-50 dark:bg-slate-700/50 border-slate-200 dark:border-slate-700">
-                      <CardContent className="py-4">
-                        <p className="text-sm text-slate-500 dark:text-slate-400">Net Tax Payable</p>
-                        <p className="text-2xl font-bold text-corporate-primary">
-                          ₹{Math.max(0, 
-                            ((gstr3bData.outwardSupplies?.total?.igst || 0) + 
-                             (gstr3bData.outwardSupplies?.total?.cgst || 0) + 
-                             (gstr3bData.outwardSupplies?.total?.sgst || 0)) -
-                            ((gstr3bData.itcAvailable?.igst || 0) + 
-                             (gstr3bData.itcAvailable?.cgst || 0) + 
-                             (gstr3bData.itcAvailable?.sgst || 0))
-                          ).toLocaleString()}
-                        </p>
-                      </CardContent>
-                    </Card>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center py-12">
-                    <AlertCircle className="h-12 w-12 text-yellow-500 dark:text-yellow-400 mb-4" />
-                    <p className="text-lg font-medium text-slate-900 dark:text-slate-100">No data to compute</p>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">Please fetch data first</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Step 4: Summary */}
-          {currentStep === 'summary' && (
-            <Card className="shadow-sm bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg text-slate-900 dark:text-slate-100">GSTR-3B Summary</CardTitle>
-                <CardDescription className="text-slate-500 dark:text-slate-400">Complete tax summary before filing</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
-                        <th className="text-left py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">Section</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">Taxable Value</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">IGST</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">CGST</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">SGST</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">CESS</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {summaryRows.map((row, idx) => (
-                        <tr key={idx} className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                          <td className="py-3 px-4 font-medium text-slate-900 dark:text-slate-100">{row.section}</td>
-                          <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{row.taxableValue.toLocaleString()}</td>
-                          <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{row.igst.toLocaleString()}</td>
-                          <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{row.cgst.toLocaleString()}</td>
-                          <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{row.sgst.toLocaleString()}</td>
-                          <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{row.cess.toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr className="bg-slate-100 dark:bg-slate-700 font-bold">
-                        <td className="py-3 px-4 text-slate-900 dark:text-slate-100">Total</td>
-                        <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{totals.taxableValue.toLocaleString()}</td>
-                        <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{totals.igst.toLocaleString()}</td>
-                        <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{totals.cgst.toLocaleString()}</td>
-                        <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{totals.sgst.toLocaleString()}</td>
-                        <td className="py-3 px-4 text-right text-slate-900 dark:text-slate-100">₹{totals.cess.toLocaleString()}</td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Step 5: Export / File */}
-          {currentStep === 'export' && (
-            <Card className="shadow-sm bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg text-slate-900 dark:text-slate-100">Export / File GSTR-3B</CardTitle>
-                <CardDescription className="text-slate-500 dark:text-slate-400">Export your return or file directly</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <Card className="border-2 border-dashed border-slate-200 dark:border-slate-600 hover:border-corporate-primary cursor-pointer transition-colors bg-white dark:bg-slate-800">
-                    <CardContent className="py-8 flex flex-col items-center">
-                      <FileDown className="h-12 w-12 text-corporate-primary mb-3" />
-                      <p className="font-medium text-slate-900 dark:text-slate-100">Export to Excel</p>
-                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Download GSTR-3B in Excel format</p>
-                      <Button 
-                        className="mt-4 bg-corporate-primary hover:bg-corporate-primaryHover"
-                        onClick={handleExport}
-                        disabled={isProcessing}
-                      >
-                        {isProcessing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                        Export Excel
-                      </Button>
-                    </CardContent>
-                  </Card>
-                  <Card className="border-2 border-dashed border-green-200 dark:border-green-800 hover:border-green-400 cursor-pointer transition-colors bg-white dark:bg-slate-800">
-                    <CardContent className="py-8 flex flex-col items-center">
-                      <Upload className="h-12 w-12 text-green-600 dark:text-green-400 mb-3" />
-                      <p className="font-medium text-slate-900 dark:text-slate-100">File Return</p>
-                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Submit GSTR-3B on GST portal</p>
-                      <Button 
-                        className="mt-4 bg-green-600 hover:bg-green-700"
-                        onClick={handleFileReturn}
-                        disabled={isProcessing}
-                      >
-                        {isProcessing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                        File Now
-                      </Button>
-                    </CardContent>
-                  </Card>
-                </div>
-              </CardContent>
-            </Card>
-          )}
+        {/* Main Table Component */}
+        <div className="flex-1 overflow-auto mt-2 mb-6 overscroll-contain">
+           {gstr3bData || isDrawerComplete ? (
+             <div className="min-w-[1800px] h-full flex flex-col items-start pr-4">
+               <GSTR3BPrepareTable businesses={mappedBusinesses} />
+             </div>
+           ) : (
+              <div className="flex flex-col items-center justify-center py-12 bg-white dark:bg-slate-800 border rounded-lg border-dashed h-full">
+                <AlertCircle className="h-10 w-10 text-slate-400 mb-4" />
+                <p className="text-slate-500 font-medium mb-4">No data loaded for this GSTIN</p>
+                <Button onClick={handleFetchData} disabled={isProcessing}>
+                  {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "Fetch Data First"}
+                </Button>
+              </div>
+           )}
         </div>
       </div>
+
+      {/* Data Availability Drawer - shown by default until user addresses it, mimicking screenshots 3 and 4 */}
+      <GSTR3BDataAvailabilityDrawer 
+        open={isDataAvailabilityDrawerOpen}
+        onOpenChange={(open) => setIsDataAvailabilityDrawerOpen(open)}
+        onProceedWithData={() => setIsDataAvailabilityDrawerOpen(false)}
+        onProceedToDownload={() => setIsDataAvailabilityDrawerOpen(false)}
+      />
+
+      <GSTR3BPreparedModal
+        open={isPreparedModalOpen}
+        onOpenChange={setIsPreparedModalOpen}
+        gstin={selectedPreviewGstin}
+      />
+
+      <GSTR3BImportFlow 
+        open={isImportFlowOpen}
+        onOpenChange={setIsImportFlowOpen}
+      />
+
     </DashboardLayout>
   );
 }

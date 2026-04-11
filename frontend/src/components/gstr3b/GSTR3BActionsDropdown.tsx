@@ -33,7 +33,8 @@ import {
   Receipt,
   BookOpen,
   PlayCircle,
-  ChevronDown
+  ChevronDown,
+  RefreshCw
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -61,6 +62,8 @@ interface GSTR3BActionsDropdownProps {
   onViewGuide?: () => void;
   onViewVideo?: () => void;
 }
+
+import { DropdownMenuLabel } from '@/components/ui/dropdown-menu';
 
 export default function GSTR3BActionsDropdown({
   onViewIGST,
@@ -202,85 +205,93 @@ export default function GSTR3BActionsDropdown({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" className="gap-2">
-          <ChevronDown className="h-3 w-3" />
+        <Button variant="outline" className="gap-2 text-blue-600 border-blue-200 hover:bg-blue-50 font-medium h-9">
           Actions
+          <ChevronDown className="h-4 w-4 ml-1" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
+      <DropdownMenuContent align="end" className="w-64 max-h-[80vh] overflow-y-auto">
         {/* VIEW Section */}
-        <DropdownMenuItem onClick={handleViewIGST}>
-          <Eye className="h-4 w-4 mr-2" />
-          Show IGST, CGST, SGST, Cess
+        <DropdownMenuLabel className="text-xs font-semibold text-slate-500 uppercase tracking-wider py-1.5 px-3">
+          VIEW
+        </DropdownMenuLabel>
+        <DropdownMenuItem onClick={handleViewIGST} className="py-2 cursor-pointer">
+          <Eye className="h-4 w-4 mr-3 text-slate-500" />
+          <span className="text-sm">Show IGST, CGST, SGST, Cess</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={handleEditDataSources}>
-          <Edit3 className="h-4 w-4 mr-2" />
-          Edit Data Sources
+        <DropdownMenuItem onClick={handleEditDataSources} className="py-2 cursor-pointer">
+          <RefreshCw className="h-4 w-4 mr-3 text-slate-500" />
+          <span className="text-sm">Edit Data Sources</span>
         </DropdownMenuItem>
         
         <DropdownMenuSeparator />
         
         {/* DOWNLOAD Section */}
-        <DropdownMenuItem onClick={handleDownloadSystem}>
-          <FileText className="h-4 w-4 mr-2" />
-          System generated GSTR3B
+        <DropdownMenuLabel className="text-xs font-semibold text-slate-500 uppercase tracking-wider py-1.5 px-3">
+          Download
+        </DropdownMenuLabel>
+        <DropdownMenuItem onClick={handleDownloadSystem} className="py-2 cursor-pointer">
+          <Download className="h-4 w-4 mr-3 text-blue-600" />
+          <span className="text-sm">System generated GSTR3B</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={handleDownloadSummary}>
-          <Download className="h-4 w-4 mr-2" />
-          Download Summary for GSTR-3B
+        <DropdownMenuItem onClick={handleDownloadSummary} className="py-2 cursor-pointer">
+          <Download className="h-4 w-4 mr-3 text-blue-600" />
+          <span className="text-sm">Download Summary for GSTR-3B</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={handleDownloadGSTN}>
-          <FileSpreadsheet className="h-4 w-4 mr-2" />
-          Download Data from GSTN
+        <DropdownMenuItem onClick={handleDownloadGSTN} className="py-2 cursor-pointer">
+          <Download className="h-4 w-4 mr-3 text-slate-500 text-green-600" />
+          <span className="text-sm text-green-600">Download Data from GSTN</span>
         </DropdownMenuItem>
         
         <DropdownMenuSeparator />
         
         {/* START WITH AN EMPTY TABLE */}
-        <DropdownMenuItem onClick={handleClearAll} className="text-red-600">
-          <Trash2 className="h-4 w-4 mr-2" />
-          Clear all values
+        <DropdownMenuLabel className="text-xs font-semibold text-slate-500 uppercase tracking-wider py-1.5 px-3">
+          START WITH AN EMPTY TABLE
+        </DropdownMenuLabel>
+        <DropdownMenuItem onClick={handleClearAll} className="py-2 cursor-pointer">
+          <Trash2 className="h-4 w-4 mr-3 text-slate-500" />
+          <span className="text-sm">Clear all values</span>
         </DropdownMenuItem>
         
         <DropdownMenuSeparator />
         
         {/* NIL RETURNS */}
-        <DropdownMenuItem onClick={handleSelectNIL}>
-          <FileText className="h-4 w-4 mr-2" />
-          Select for NIL Returns
+        <DropdownMenuLabel className="text-xs font-semibold text-slate-500 uppercase tracking-wider py-1.5 px-3">
+          NIL RETURNS
+        </DropdownMenuLabel>
+        <DropdownMenuItem onClick={handleSelectNIL} className="py-2 cursor-pointer">
+          <FileText className="h-4 w-4 mr-3 text-blue-600 bg-blue-100 p-0.5 rounded-sm" />
+          <span className="text-sm text-slate-700">Select for NIL Returns</span>
         </DropdownMenuItem>
         
         <DropdownMenuSeparator />
         
         {/* INVOICES */}
-        <DropdownMenuItem onClick={handleViewSales}>
-          <ShoppingCart className="h-4 w-4 mr-2" />
-          View sales invoices
+        <DropdownMenuLabel className="text-xs font-semibold text-slate-500 uppercase tracking-wider py-1.5 px-3">
+          INVOICES
+        </DropdownMenuLabel>
+        <DropdownMenuItem onClick={handleViewSales} className="py-2 cursor-pointer">
+          <span className="text-sm text-slate-700 font-medium">View sales invoices</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={handleViewPurchase}>
-          <Receipt className="h-4 w-4 mr-2" />
-          View purchase invoices
+        <DropdownMenuItem onClick={handleViewPurchase} className="py-2 cursor-pointer">
+          <span className="text-sm text-slate-700 font-medium">View purchase invoices</span>
         </DropdownMenuItem>
         
         <DropdownMenuSeparator />
         
         {/* GUIDES */}
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <BookOpen className="h-4 w-4 mr-2" />
-            Guides
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
-            <DropdownMenuItem onClick={handleViewGuide}>
-              <BookOpen className="h-4 w-4 mr-2" />
-              Guide
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleViewVideo}>
-              <PlayCircle className="h-4 w-4 mr-2" />
-              Video
-            </DropdownMenuItem>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
+        <DropdownMenuLabel className="text-xs font-semibold text-slate-500 uppercase tracking-wider py-1.5 px-3">
+          Guides
+        </DropdownMenuLabel>
+        <DropdownMenuItem onClick={handleViewGuide} className="py-2 cursor-pointer">
+          <BookOpen className="h-4 w-4 mr-3 text-slate-400" />
+          <span className="text-sm text-slate-700">Guide</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={handleViewVideo} className="py-2 cursor-pointer">
+          <PlayCircle className="h-4 w-4 mr-3 text-slate-400" />
+          <span className="text-sm text-slate-700">Video</span>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

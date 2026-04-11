@@ -9,12 +9,12 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { 
-  Search, 
-  ChevronDown, 
-  ChevronRight, 
-  Check, 
-  CheckCircle, 
+import {
+  Search,
+  ChevronDown,
+  ChevronRight,
+  Check,
+  CheckCircle,
   Circle,
   ArrowRight,
   Loader2,
@@ -27,31 +27,31 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { 
-  Drawer, 
-  DrawerContent, 
-  DrawerHeader, 
-  DrawerTitle, 
+import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
   DrawerDescription,
   DrawerFooter,
   DrawerClose
 } from '@/components/ui/drawer';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { 
-  Select, 
-  SelectContent, 
-  SelectItem, 
-  SelectTrigger, 
-  SelectValue 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { 
-  getBusinessesWithGstins, 
-  generateGSTINOTP, 
+import {
+  getBusinessesWithGstins,
+  generateGSTINOTP,
   verifyGSTINOTP,
-  BusinessWithGstins 
+  BusinessWithGstins
 } from '@/lib/api';
 
 // Types for business hierarchy - using API types
@@ -79,11 +79,11 @@ const fallbackBusinesses: BusinessEntity[] = [];
 // Generate return periods
 const generateReturnPeriods = (): ReturnPeriod[] => {
   const periods: ReturnPeriod[] = [];
-  const months = ['January', 'February', 'March', 'April', 'May', 'June', 
-                  'July', 'August', 'September', 'October', 'November', 'December'];
+  const months = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
   const quarters = ['Q1', 'Q2', 'Q3', 'Q4'];
   const currentYear = new Date().getFullYear();
-  
+
   // Add monthly periods for last 12 months
   for (let i = 0; i < 12; i++) {
     const date = new Date(currentYear, i, 1);
@@ -96,7 +96,7 @@ const generateReturnPeriods = (): ReturnPeriod[] => {
       type: 'monthly'
     });
   }
-  
+
   // Add quarterly periods
   for (let q = 0; q < 4; q++) {
     periods.push({
@@ -105,14 +105,14 @@ const generateReturnPeriods = (): ReturnPeriod[] => {
       type: 'quarterly'
     });
   }
-  
+
   return periods;
 };
 
 export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GSTR3BDrawerFlowProps) {
   const { toast } = useToast();
   const { currentOrganization, isDemoMode } = useAuth();
-  
+
   // State for business selector
   const [businesses, setBusinesses] = useState<BusinessEntity[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -120,17 +120,17 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
   const [returnPeriod, setReturnPeriod] = useState<string>('');
   const [returnPeriods, setReturnPeriods] = useState<ReturnPeriod[]>([]);
   const [isLoadingBusinesses, setIsLoadingBusinesses] = useState(false);
-  
+
   // OTP flow state
   const [otpStep, setOtpStep] = useState<'select' | 'credentials' | 'verify' | 'success'>('select');
   const [selectedGstinForOtp, setSelectedGstinForOtp] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
   const [otp, setOtp] = useState('');
   const [otpRequestId, setOtpRequestId] = useState<string>('');
-  
+
   // Current drawer step
   const [currentDrawer, setCurrentDrawer] = useState<'business' | 'otp'>('business');
-  
+
   // Fetch businesses from API on mount
   useEffect(() => {
     const fetchBusinesses = async () => {
@@ -168,9 +168,9 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
         setIsLoadingBusinesses(false);
         return;
       }
-      
+
       if (!currentOrganization?.id) return;
-      
+
       setIsLoadingBusinesses(true);
       try {
         const response = await getBusinessesWithGstins(currentOrganization.id);
@@ -192,10 +192,10 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
         setIsLoadingBusinesses(false);
       }
     };
-    
+
     fetchBusinesses();
   }, [currentOrganization?.id, isDemoMode]);
-  
+
   // Generate return periods on mount
   useEffect(() => {
     setReturnPeriods(generateReturnPeriods());
@@ -204,7 +204,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
     const currentYear = new Date().getFullYear();
     setReturnPeriod(`${currentMonth}${currentYear}`);
   }, []);
-  
+
   // Filter businesses by search term
   const filteredBusinesses = businesses.filter(business => {
     if (!searchTerm) return true;
@@ -212,20 +212,20 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
     return (
       business.name.toLowerCase().includes(term) ||
       business.pan.toLowerCase().includes(term) ||
-      business.gstins.some(g => 
-        g.gstin.toLowerCase().includes(term) || 
+      business.gstins.some(g =>
+        g.gstin.toLowerCase().includes(term) ||
         g.state.toLowerCase().includes(term)
       )
     );
   });
-  
+
   // Toggle business expansion
   const toggleBusinessExpansion = (businessId: string) => {
-    setBusinesses(prev => prev.map(b => 
+    setBusinesses(prev => prev.map(b =>
       b.id === businessId ? { ...b, isExpanded: !b.isExpanded } : b
     ));
   };
-  
+
   // Toggle GSTIN selection
   const toggleGstinSelection = (gstin: string) => {
     setSelectedGstins(prev => {
@@ -238,7 +238,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
       return newSet;
     });
   };
-  
+
   // Handle OTP initiate - calls real backend API
   const handleInitiateOtp = async (gstin: string) => {
     if (!currentOrganization?.id) {
@@ -249,10 +249,10 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
       });
       return;
     }
-    
+
     setSelectedGstinForOtp(gstin);
     setIsLoading(true);
-    
+
     try {
       const response = await generateGSTINOTP(currentOrganization.id, gstin);
       if (response.success && response.otp_request_id) {
@@ -280,13 +280,13 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
       setIsLoading(false);
     }
   };
-  
+
   // Handle credentials submit (legacy - now just triggers OTP)
   const handleCredentialsSubmit = () => {
     // Now handled directly in handleInitiateOtp
     handleInitiateOtp(selectedGstinForOtp);
   };
-  
+
   // Handle OTP verify - calls real backend API
   const handleOtpVerify = async () => {
     if (otp.length !== 6) {
@@ -297,7 +297,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
       });
       return;
     }
-    
+
     if (!currentOrganization?.id) {
       toast({
         title: 'Error',
@@ -306,9 +306,9 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
       });
       return;
     }
-    
+
     setIsLoading(true);
-    
+
     try {
       const response = await verifyGSTINOTP(
         currentOrganization.id,
@@ -316,18 +316,18 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
         otp,
         otpRequestId
       );
-      
+
       if (response.success && response.is_verified) {
         setOtpStep('success');
-        
+
         // Update the GSTIN as connected
         setBusinesses(prev => prev.map(b => ({
           ...b,
-          gstins: b.gstins.map(g => 
+          gstins: b.gstins.map(g =>
             g.gstin === selectedGstinForOtp ? { ...g, isConnected: true } : g
           )
         })));
-        
+
         toast({
           title: 'GSTIN Connected',
           description: response.message || `${selectedGstinForOtp} has been successfully verified`,
@@ -350,7 +350,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
       setIsLoading(false);
     }
   };
-  
+
   // Handle continue from business selector
   const handleBusinessSelectorContinue = () => {
     if (selectedGstins.size === 0) {
@@ -369,7 +369,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
       });
       return;
     }
-    
+
     // Check if any selected GSTINs need connection
     const unconnectedGstins = Array.from(selectedGstins).filter(gstin => {
       for (const business of businesses) {
@@ -378,26 +378,26 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
       }
       return false;
     });
-    
+
     if (unconnectedGstins.length > 0) {
       setCurrentDrawer('otp');
     } else {
       onContinue(Array.from(selectedGstins), returnPeriod);
     }
   };
-  
+
   // Handle skip OTP
   const handleSkipOtp = () => {
     onContinue(Array.from(selectedGstins), returnPeriod);
   };
-  
+
   // Reset OTP flow
   const resetOtpFlow = () => {
     setOtpStep('select');
     setSelectedGstinForOtp('');
     setOtp('');
   };
-  
+
   // Get connected and unconnected GSTINs
   const connectedGstins = Array.from(selectedGstins).filter(gstin => {
     for (const business of businesses) {
@@ -406,7 +406,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
     }
     return false;
   });
-  
+
   const unconnectedGstins = Array.from(selectedGstins).filter(gstin => {
     for (const business of businesses) {
       const found = business.gstins.find(g => g.gstin === gstin);
@@ -414,7 +414,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
     }
     return false;
   });
-  
+
   // Render business selector drawer
   const renderBusinessSelector = () => (
     <Drawer open={open && currentDrawer === 'business'} onOpenChange={onOpenChange}>
@@ -425,19 +425,19 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
             Select businesses and GSTINs for filing
           </DrawerDescription>
         </DrawerHeader>
-        
+
         <div className="flex-1 overflow-y-auto px-4">
           {/* Search */}
           <div className="relative mb-4">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-            <Input 
+            <Input
               placeholder="Search by business name, PAN, or GSTIN..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-9"
             />
           </div>
-          
+
           {/* Business Tree */}
           <div className="space-y-2">
             {isLoadingBusinesses ? (
@@ -453,71 +453,70 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
               </div>
             ) : (
               filteredBusinesses.map(business => (
-              <div key={business.id} className="border rounded-lg overflow-hidden">
-                {/* Business Header */}
-                <div 
-                  className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700"
-                  onClick={() => toggleBusinessExpansion(business.id)}
-                >
-                  {business.isExpanded ? (
-                    <ChevronDown className="h-4 w-4 text-slate-500" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-slate-500" />
-                  )}
-                  <Building2 className="h-4 w-4 text-corporate-primary" />
-                  <span className="font-medium text-slate-900 dark:text-slate-100">
-                    {business.name}
-                  </span>
-                  <span className="text-sm text-slate-500">
-                    (PAN: {business.pan})
-                  </span>
-                </div>
-                
-                {/* GSTIN List */}
-                {business.isExpanded && (
-                  <div className="bg-white dark:bg-slate-900">
-                    {business.gstins.map(gstin => (
-                      <div 
-                        key={gstin.id}
-                        className="flex items-center gap-3 p-3 hover:bg-slate-50 dark:hover:bg-slate-800 border-t"
-                      >
-                        <Checkbox 
-                          checked={selectedGstins.has(gstin.gstin)}
-                          onCheckedChange={() => toggleGstinSelection(gstin.gstin)}
-                        />
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-sm">{gstin.gstin}</span>
-                            <Badge variant="outline" className="text-xs">
-                              {gstin.state}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-2 mt-1">
-                            <Badge 
-                              className={`text-xs ${
-                                gstin.status === 'Regular' 
-                                  ? 'bg-green-100 text-green-700' 
-                                  : 'bg-yellow-100 text-yellow-700'
-                              }`}
-                            >
-                              {gstin.status}
-                            </Badge>
-                            {gstin.isConnected && (
-                              <Badge className="bg-blue-100 text-blue-700 text-xs">
-                                <CheckCircle className="h-3 w-3 mr-1" />
-                                Connected
+                <div key={business.id} className="border rounded-lg overflow-hidden">
+                  {/* Business Header */}
+                  <div
+                    className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700"
+                    onClick={() => toggleBusinessExpansion(business.id)}
+                  >
+                    {business.isExpanded ? (
+                      <ChevronDown className="h-4 w-4 text-slate-500" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 text-slate-500" />
+                    )}
+                    <Building2 className="h-4 w-4 text-corporate-primary" />
+                    <span className="font-medium text-slate-900 dark:text-slate-100">
+                      {business.name}
+                    </span>
+                    <span className="text-sm text-slate-500">
+                      (PAN: {business.pan})
+                    </span>
+                  </div>
+
+                  {/* GSTIN List */}
+                  {business.isExpanded && (
+                    <div className="bg-white dark:bg-slate-900">
+                      {business.gstins.map(gstin => (
+                        <div
+                          key={gstin.id}
+                          className="flex items-center gap-3 p-3 hover:bg-slate-50 dark:hover:bg-slate-800 border-t"
+                        >
+                          <Checkbox
+                            checked={selectedGstins.has(gstin.gstin)}
+                            onCheckedChange={() => toggleGstinSelection(gstin.gstin)}
+                          />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-sm">{gstin.gstin}</span>
+                              <Badge variant="outline" className="text-xs">
+                                {gstin.state}
                               </Badge>
-                            )}
+                            </div>
+                            <div className="flex items-center gap-2 mt-1">
+                              <Badge
+                                className={`text-xs ${gstin.status === 'Regular'
+                                    ? 'bg-green-100 text-green-700'
+                                    : 'bg-yellow-100 text-yellow-700'
+                                  }`}
+                              >
+                                {gstin.status}
+                              </Badge>
+                              {gstin.isConnected && (
+                                <Badge className="bg-blue-100 text-blue-700 text-xs">
+                                  <CheckCircle className="h-3 w-3 mr-1" />
+                                  Connected
+                                </Badge>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )))}
           </div>
-          
+
           {/* Return Period Selector */}
           <div className="mt-6 p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
@@ -536,7 +535,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
               </SelectContent>
             </Select>
           </div>
-          
+
           {/* Selection Summary */}
           <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
             <p className="text-sm text-blue-700 dark:text-blue-300">
@@ -544,9 +543,9 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
             </p>
           </div>
         </div>
-        
+
         <DrawerFooter>
-          <Button 
+          <Button
             onClick={handleBusinessSelectorContinue}
             className="w-full bg-corporate-primary hover:bg-corporate-primaryHover"
           >
@@ -557,14 +556,14 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
       </DrawerContent>
     </Drawer>
   );
-  
+
   const renderOtpConnectDrawer = () => {
     const totalGstins = selectedGstins.size;
     const unconnectedCount = unconnectedGstins.length;
     const connectedCount = connectedGstins.length;
 
     return (
-      <Drawer open={currentDrawer === 'otp'} onOpenChange={() => {}}>
+      <Drawer open={currentDrawer === 'otp'} onOpenChange={() => { }}>
         <DrawerContent className="w-full sm:w-[400px] mx-auto sm:ml-auto sm:mr-0 h-full right-0 left-auto mt-0 rounded-none border-l">
           <DrawerHeader className="border-b pb-4">
             <div className="flex justify-between items-center">
@@ -578,18 +577,18 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
               <div className="text-sm text-slate-500">Feb 26</div>
             </div>
           </DrawerHeader>
-          
+
           <div className="flex-1 overflow-y-auto p-4 bg-slate-50/50">
             {otpStep === 'select' && (
               <div className="space-y-4">
                 <div className="relative mb-4">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <Input 
-                    placeholder="State name or GSTIN number" 
+                  <Input
+                    placeholder="State name or GSTIN number"
                     className="pl-9 bg-white"
                   />
                 </div>
-                
+
                 {/* Unconnected GSTINs Accordion */}
                 <div className="border bg-red-50/30 border-red-100 rounded-lg p-3">
                   <div className="flex justify-between items-start">
@@ -603,8 +602,8 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
                       </p>
                     </div>
                     {unconnectedCount > 0 && (
-                      <Button 
-                        size="sm" 
+                      <Button
+                        size="sm"
                         className="bg-blue-600 hover:bg-blue-700 h-8 font-medium shadow-none whitespace-nowrap"
                         onClick={() => {
                           setSelectedGstinForOtp(unconnectedGstins[0]);
@@ -649,7 +648,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
                 </div>
               </div>
             )}
-            
+
             {otpStep === 'credentials' && (
               <div className="space-y-4">
                 <div className="p-4 bg-white border border-slate-200 shadow-sm rounded-lg">
@@ -667,7 +666,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
                     </div>
                   </div>
                 </div>
-                <Button 
+                <Button
                   onClick={handleCredentialsSubmit}
                   disabled={isLoading}
                   className="w-full bg-blue-600 hover:bg-blue-700"
@@ -680,16 +679,16 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
                 </Button>
               </div>
             )}
-            
+
             {otpStep === 'verify' && (
               <div className="space-y-4">
                 <div className="p-4 bg-white border border-slate-200 shadow-sm rounded-lg text-center">
                   <Shield className="h-10 w-10 text-blue-600 mx-auto mb-3" />
                   <p className="text-sm text-slate-600 mb-4">
-                    Enter the 6-digit OTP sent to your registered mobile number/email for 
+                    Enter the 6-digit OTP sent to your registered mobile number/email for
                     <span className="font-mono font-medium block mt-1">{selectedGstinForOtp}</span>
                   </p>
-                  <Input 
+                  <Input
                     placeholder="Enter 6-digit OTP"
                     value={otp}
                     onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
@@ -697,7 +696,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
                     maxLength={6}
                   />
                 </div>
-                <Button 
+                <Button
                   onClick={handleOtpVerify}
                   disabled={isLoading || otp.length !== 6}
                   className="w-full bg-blue-600 hover:bg-blue-700"
@@ -709,7 +708,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
                 </Button>
               </div>
             )}
-            
+
             {otpStep === 'success' && (
               <div className="space-y-4">
                 <div className="p-8 bg-green-50 border border-green-100 rounded-lg text-center">
@@ -717,7 +716,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
                   <h3 className="text-lg font-semibold text-green-700 mb-1">GSTIN Connected!</h3>
                   <p className="text-sm text-green-600/80">{selectedGstinForOtp} verified</p>
                 </div>
-                <Button 
+                <Button
                   onClick={() => {
                     const remainingUnconnected = unconnectedGstins.filter(g => g !== selectedGstinForOtp);
                     if (remainingUnconnected.length > 0) resetOtpFlow();
@@ -730,10 +729,10 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
               </div>
             )}
           </div>
-          
+
           <div className="p-4 bg-white border-t mt-auto">
-            <Button 
-              className="w-full bg-blue-600 hover:bg-blue-700 h-10 shadow-none font-medium gap-2" 
+            <Button
+              className="w-full bg-blue-600 hover:bg-blue-700 h-10 shadow-none font-medium gap-2"
               onClick={handleSkipOtp}
             >
               Skip
@@ -743,7 +742,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
       </Drawer>
     );
   };
-  
+
   return (
     <>
       {renderBusinessSelector()}

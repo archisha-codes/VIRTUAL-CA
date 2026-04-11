@@ -16,7 +16,7 @@ export function DashboardLayout({ children, title }: DashboardLayoutProps) {
         <AppSidebar />
         <div className="flex-1 flex flex-col">
           <AppHeader title={title} />
-          <main className="flex-1 p-6 bg-background overflow-auto">
+          <main className="flex-1 p-6 bg-background overflow-auto flex flex-col relative min-h-0">
             {children}
           </main>
         </div>

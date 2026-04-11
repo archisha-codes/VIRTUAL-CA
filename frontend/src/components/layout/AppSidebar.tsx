@@ -198,12 +198,12 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* IMS Section */}
+        {/* Reconciliations Section */}
         <Collapsible open={imsOpen} onOpenChange={setImsOpen} className="mt-2">
           <SidebarGroup>
             <CollapsibleTrigger className="flex items-center w-full px-3 py-2 text-sidebar-foreground/50 text-xs uppercase tracking-wider hover:text-sidebar-foreground/70">
               {imsOpen ? <ChevronDown className="h-4 w-4 mr-1" /> : <ChevronRight className="h-4 w-4 mr-1" />}
-              IMS
+              Reconciliations
             </CollapsibleTrigger>
             <CollapsibleContent>
               <SidebarGroupContent>
