@@ -11,6 +11,9 @@
 
 import { useState, useEffect } from 'react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
+import GSTR3BReviewTaxCalculation from '@/components/gstr3b/GSTR3BReviewTaxCalculation';
+import GSTR3BUploadGSTN from '@/components/gstr3b/GSTR3BUploadGSTN';
+import { cn } from '@/lib/utils';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -31,7 +34,8 @@ import {
   MoreHorizontal,
   ChevronDown,
   AlertTriangle,
-  FilePlus
+  FilePlus,
+  ArrowLeft
 } from 'lucide-react';
 import GSTR3BActionsDropdown from '@/components/gstr3b/GSTR3BActionsDropdown';
 import { useToast } from '@/hooks/use-toast';
@@ -50,10 +54,11 @@ import GSTR3BPrepareTable from '@/components/gstr3b/GSTR3BPrepareTable';
 import GSTR3BDataAvailabilityDrawer from '@/components/gstr3b/GSTR3BDataAvailabilityDrawer';
 import GSTR3BPreparedModal from '@/components/gstr3b/GSTR3BPreparedModal';
 import GSTR3BImportFlow from '@/components/gstr3b/GSTR3BImportFlow';
+import GSTR3BEditDataSources from '@/components/gstr3b/GSTR3BEditDataSources';
 import { ExternalLink } from 'lucide-react';
 
 // Step types
-type GSTR3BStep = 'fetch' | 'review' | 'compute' | 'summary' | 'export';
+type GSTR3BStep = 'fetch' | 'review' | 'review_tax' | 'upload_gstn' | 'compute' | 'summary' | 'export';
 
 // Workflow steps
 const workflowSteps = [
@@ -140,6 +145,9 @@ export default function GSTR3BPage() {
 
   // Import flow state
   const [isImportFlowOpen, setIsImportFlowOpen] = useState(false);
+  
+  // Edit Data Sources state
+  const [isEditDataSourcesOpen, setIsEditDataSourcesOpen] = useState(false);
   useEffect(() => {
     const handleOpenModal = (e: Event) => {
       const customEvent = e as CustomEvent;
@@ -588,7 +596,10 @@ export default function GSTR3BPage() {
               <p className="text-sm text-slate-600 dark:text-slate-400">
                 Data sources have been pre-applied based on your previous filing. You may choose to edit these, and any updates will be automatically saved as your new preferences.
               </p>
-              <button className="text-sm text-blue-600 hover:underline whitespace-nowrap ml-4">
+              <button 
+                className="text-sm text-blue-600 hover:underline whitespace-nowrap ml-4"
+                onClick={() => setIsEditDataSourcesOpen(true)}
+              >
                 Edit Data Sources
               </button>
             </div>
@@ -596,7 +607,22 @@ export default function GSTR3BPage() {
             {/* Action Buttons Row */}
             <div className="flex items-center justify-between pt-2">
               <div className="flex items-center gap-4">
-                {/* Empty left side */}
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="p-0 h-auto hover:bg-transparent text-slate-400 hover:text-slate-600 gap-1.5"
+                  onClick={() => {
+                    if (currentStep === 'review_tax') setCurrentStep('review');
+                    else if (currentStep === 'upload_gstn') setCurrentStep('review_tax');
+                    else if (currentStep === 'review') {
+                      setDrawerOpen(true);
+                      setIsDrawerComplete(false);
+                    }
+                  }}
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  <span className="text-xs font-bold uppercase tracking-widest">Back</span>
+                </Button>
               </div>
               <div className="flex items-center gap-3">
                 <Button 
@@ -619,6 +645,7 @@ export default function GSTR3BPage() {
                 </Button>
                 <Button 
                   className="bg-blue-600 hover:bg-blue-700 text-white font-medium gap-2 px-6 h-9"
+                  onClick={() => setCurrentStep('review_tax')}
                 >
                   Proceed to Next Step <ArrowRight className="h-4 w-4" />
                 </Button>
@@ -627,9 +654,23 @@ export default function GSTR3BPage() {
           </div>
         </div>
 
-        {/* Main Table Component */}
-        <div className="flex-1 overflow-auto mt-2 mb-6 overscroll-contain">
-           {gstr3bData || isDrawerComplete ? (
+        {/* Conditional Rendering based on Step */}
+        <div className={cn("flex-1 overflow-auto mt-2 mb-6 overscroll-contain", currentStep === 'upload_gstn' && "mb-0")}>
+           {currentStep === 'upload_gstn' ? (
+             <GSTR3BUploadGSTN 
+                businessName={currentOrganization?.name || "Bauer Specialized Foundation Contractor India Private Limited AADCB1626P"}
+                gstin={filters.gstin || defaultGstin}
+                onBack={() => setCurrentStep('review_tax')}
+                onProceed={() => setCurrentStep('compute')}
+             />
+           ) : currentStep === 'review_tax' ? (
+             <GSTR3BReviewTaxCalculation 
+                businessName={currentOrganization?.name || "Bauer Specialized Foundation Contractor India Private Limited AADCB1626P"}
+                gstin={filters.gstin || defaultGstin}
+                onBack={() => setCurrentStep('review')}
+                onProceed={() => setCurrentStep('upload_gstn')}
+             />
+           ) : gstr3bData || isDrawerComplete ? (
              <div className="min-w-[1800px] h-full flex flex-col items-start pr-4">
                <GSTR3BPrepareTable businesses={mappedBusinesses} />
              </div>
@@ -662,6 +703,14 @@ export default function GSTR3BPage() {
       <GSTR3BImportFlow 
         open={isImportFlowOpen}
         onOpenChange={setIsImportFlowOpen}
+      />
+
+      <GSTR3BEditDataSources 
+        open={isEditDataSourcesOpen}
+        onOpenChange={setIsEditDataSourcesOpen}
+        onProceedToNextStep={() => setCurrentStep('review_tax')}
+        businessName={currentOrganization?.name || "Bauer Specialized Foundation Contractor India Private Limited AADCB1626P"}
+        gstin={filters.gstin || defaultGstin}
       />
 
     </DashboardLayout>
