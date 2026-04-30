@@ -1,0 +1,389 @@
+import { useState, useEffect, useMemo } from 'react';
+import { DashboardLayout } from '@/components/layout/DashboardLayout';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { TablePagination } from '@/components/invoices/TablePagination';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
+import { CheckCircle, AlertTriangle, XCircle, Search, FileText, Loader2, Info } from 'lucide-react';
+import { format } from 'date-fns';
+
+interface Invoice {
+  id: string;
+  invoice_number: string;
+  invoice_date: string;
+  customer_name: string | null;
+  customer_gstin: string | null;
+  place_of_supply: string | null;
+  taxable_value: number;
+  cgst_amount: number;
+  sgst_amount: number;
+  igst_amount: number;
+  total_amount: number;
+  invoice_type: string;
+  validation_status: string;
+  validation_errors: { field: string; message: string; severity: string }[];
+}
+
+const statusConfig = {
+  passed: { icon: CheckCircle, color: 'text-success', bgColor: 'bg-success/10', label: 'Passed' },
+  warning: { icon: AlertTriangle, color: 'text-warning', bgColor: 'bg-warning/10', label: 'Warning' },
+  failed: { icon: XCircle, color: 'text-destructive', bgColor: 'bg-destructive/10', label: 'Failed' },
+  pending: { icon: Info, color: 'text-muted-foreground', bgColor: 'bg-muted', label: 'Pending' },
+};
+
+export default function InvoicesPage() {
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const { user, isDemoMode } = useAuth();
+
+  useEffect(() => {
+    if (user || isDemoMode) {
+      fetchInvoices();
+    }
+  }, [user, isDemoMode]);
+
+  const fetchInvoices = async () => {
+    // If in demo mode, show demo data
+    if (isDemoMode) {
+      setLoading(true);
+      // Demo data
+      const demoInvoices: Invoice[] = [
+        {
+          id: '1',
+          invoice_number: 'INV-2026-001',
+          invoice_date: '2026-03-01',
+          customer_name: 'ABC Corporation',
+          customer_gstin: '29ABCDE1234F1Z5',
+          place_of_supply: '29-Karnataka',
+          taxable_value: 100000,
+          cgst_amount: 9000,
+          sgst_amount: 9000,
+          igst_amount: 0,
+          total_amount: 118000,
+          invoice_type: 'B2B',
+          validation_status: 'passed',
+          validation_errors: [],
+        },
+        {
+          id: '2',
+          invoice_number: 'INV-2026-002',
+          invoice_date: '2026-03-02',
+          customer_name: 'XYZ Traders',
+          customer_gstin: '27XYZAB5678G1Z6',
+          place_of_supply: '27-Maharashtra',
+          taxable_value: 50000,
+          cgst_amount: 0,
+          sgst_amount: 0,
+          igst_amount: 9000,
+          total_amount: 59000,
+          invoice_type: 'B2B',
+          validation_status: 'passed',
+          validation_errors: [],
+        },
+        {
+          id: '3',
+          invoice_number: 'INV-2026-003',
+          invoice_date: '2026-03-03',
+          customer_name: 'Retail Shop',
+          customer_gstin: '',
+          place_of_supply: '29-Karnataka',
+          taxable_value: 25000,
+          cgst_amount: 2250,
+          sgst_amount: 2250,
+          igst_amount: 0,
+          total_amount: 29500,
+          invoice_type: 'B2CS',
+          validation_status: 'warning',
+          validation_errors: [{ field: 'customer_gstin', message: 'GSTIN not provided for B2CS', severity: 'warning' }],
+        },
+      ];
+      setInvoices(demoInvoices);
+      setLoading(false);
+      return;
+    }
+
+    if (!user) return;
+
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('invoices')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('invoice_category', 'sales')
+      .order('created_at', { ascending: false });
+
+    if (!error && data) {
+      const typedInvoices = data.map(inv => ({
+        ...inv,
+        taxable_value: inv.taxable_value ?? 0,
+        cgst_amount: inv.cgst_amount ?? 0,
+        sgst_amount: inv.sgst_amount ?? 0,
+        igst_amount: inv.igst_amount ?? 0,
+        total_amount: inv.total_amount ?? 0,
+        invoice_type: inv.invoice_type ?? 'B2B',
+        validation_status: inv.validation_status ?? 'pending',
+        validation_errors: (inv.validation_errors as unknown as Invoice['validation_errors']) || [],
+      }));
+      setInvoices(typedInvoices);
+    }
+    setLoading(false);
+  };
+
+  const filteredInvoices = useMemo(() => {
+    return invoices.filter(inv => {
+      const matchesSearch = 
+        inv.invoice_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        inv.customer_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        inv.customer_gstin?.toLowerCase().includes(searchTerm.toLowerCase());
+
+      const matchesStatus = statusFilter === 'all' || inv.validation_status === statusFilter;
+      const matchesType = typeFilter === 'all' || inv.invoice_type === typeFilter;
+
+      return matchesSearch && matchesStatus && matchesType;
+    });
+  }, [invoices, searchTerm, statusFilter, typeFilter]);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter, typeFilter, pageSize]);
+
+  const totalPages = Math.ceil(filteredInvoices.length / pageSize);
+  const paginatedInvoices = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredInvoices.slice(start, start + pageSize);
+  }, [filteredInvoices, currentPage, pageSize]);
+
+  const stats = {
+    total: invoices.length,
+    passed: invoices.filter(i => i.validation_status === 'passed').length,
+    warning: invoices.filter(i => i.validation_status === 'warning').length,
+    failed: invoices.filter(i => i.validation_status === 'failed').length,
+  };
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 2,
+    }).format(value);
+  };
+
+  return (
+    <DashboardLayout title="Invoice Preview">
+      <div className="space-y-6 animate-fade-in">
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <Card className="shadow-card">
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Total Invoices</p>
+                  <p className="text-2xl font-bold">{stats.total}</p>
+                </div>
+                <FileText className="h-8 w-8 text-primary/20" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="shadow-card">
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Passed</p>
+                  <p className="text-2xl font-bold text-success">{stats.passed}</p>
+                </div>
+                <CheckCircle className="h-8 w-8 text-success/20" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="shadow-card">
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Warnings</p>
+                  <p className="text-2xl font-bold text-warning">{stats.warning}</p>
+                </div>
+                <AlertTriangle className="h-8 w-8 text-warning/20" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="shadow-card">
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Failed</p>
+                  <p className="text-2xl font-bold text-destructive">{stats.failed}</p>
+                </div>
+                <XCircle className="h-8 w-8 text-destructive/20" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Filters */}
+        <Card className="shadow-card">
+          <CardHeader>
+            <CardTitle>Invoice List</CardTitle>
+            <CardDescription>
+              Review and validate your uploaded invoices
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col md:flex-row gap-4 mb-6">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by invoice number, customer name, or GSTIN..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-full md:w-40">
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="passed">Passed</SelectItem>
+                  <SelectItem value="warning">Warning</SelectItem>
+                  <SelectItem value="failed">Failed</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <SelectTrigger className="w-full md:w-40">
+                  <SelectValue placeholder="Type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value="B2B">B2B</SelectItem>
+                  <SelectItem value="B2CL">B2CL</SelectItem>
+                  <SelectItem value="B2CS">B2CS</SelectItem>
+                  <SelectItem value="EXPORT">Export</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {loading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+            ) : filteredInvoices.length === 0 ? (
+              <div className="text-center py-12">
+                <FileText className="h-12 w-12 text-muted-foreground/50 mx-auto mb-4" />
+                <p className="text-muted-foreground">
+                  {invoices.length === 0 
+                    ? 'No invoices uploaded yet. Go to Upload page to get started.'
+                    : 'No invoices match your filters.'}
+                </p>
+                {invoices.length === 0 && (
+                  <Button className="mt-4" onClick={() => window.location.href = '/upload'}>
+                    Upload Invoices
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="rounded-md border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50">
+                      <TableHead className="w-[100px]">Status</TableHead>
+                      <TableHead>Invoice No.</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>GSTIN</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead className="text-right">Taxable</TableHead>
+                      <TableHead className="text-right">Tax</TableHead>
+                      <TableHead className="text-right">Total</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {paginatedInvoices.map((invoice) => {
+                      const status = statusConfig[invoice.validation_status as keyof typeof statusConfig] || statusConfig.pending;
+                      const StatusIcon = status.icon;
+                      const totalTax = invoice.cgst_amount + invoice.sgst_amount + invoice.igst_amount;
+
+                      return (
+                        <TableRow key={invoice.id} className="hover:bg-muted/30">
+                          <TableCell>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <div className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium ${status.bgColor} ${status.color}`}>
+                                  <StatusIcon className="h-3 w-3" />
+                                  {status.label}
+                                </div>
+                              </TooltipTrigger>
+                              {invoice.validation_errors.length > 0 && (
+                                <TooltipContent className="max-w-xs">
+                                  <ul className="text-xs space-y-1">
+                                    {invoice.validation_errors.map((err, idx) => (
+                                      <li key={idx} className="flex items-start gap-1">
+                                        <span className={err.severity === 'error' ? 'text-destructive' : 'text-warning'}>•</span>
+                                        {err.message}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </TooltipContent>
+                              )}
+                            </Tooltip>
+                          </TableCell>
+                          <TableCell className="font-medium">{invoice.invoice_number}</TableCell>
+                          <TableCell>
+                            {invoice.invoice_date 
+                              ? format(new Date(invoice.invoice_date), 'dd MMM yyyy')
+                              : '-'}
+                          </TableCell>
+                          <TableCell className="max-w-[150px] truncate">
+                            {invoice.customer_name || '-'}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {invoice.customer_gstin || '-'}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{invoice.invoice_type}</Badge>
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {formatCurrency(invoice.taxable_value)}
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {formatCurrency(totalTax)}
+                          </TableCell>
+                          <TableCell className="text-right font-mono font-medium">
+                            {formatCurrency(invoice.total_amount)}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+                </div>
+              
+                <TablePagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  pageSize={pageSize}
+                  totalItems={filteredInvoices.length}
+                  onPageChange={setCurrentPage}
+                  onPageSizeChange={setPageSize}
+                />
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </DashboardLayout>
+  );
+}
