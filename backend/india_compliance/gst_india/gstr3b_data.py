@@ -273,10 +273,10 @@ def calculate_interstate_summary(gstr1_tables: Dict[str, Any]) -> Dict[str, Dict
     Returns:
         Dictionary with state code as key and tax values as value
     """
-    state_summary: Dict[str, Dict[str, float]] = defaultdict(lambda: {
-        "taxable_value": 0.0,
-        "igst": 0.0,
-        "cess": 0.0,
+    state_summary: Dict[str, Dict[str, Decimal]] = defaultdict(lambda: {
+        "taxable_value": Decimal('0'),
+        "igst": Decimal('0'),
+        "cess": Decimal('0'),
     })
     
     # Process B2CL (already inter-state by definition)
@@ -286,9 +286,9 @@ def calculate_interstate_summary(gstr1_tables: Dict[str, Any]) -> Dict[str, Dict
         if not state_code:
             continue
         
-        state_summary[state_code]["taxable_value"] += extract_taxable_value(invoice)
-        state_summary[state_code]["igst"] += extract_tax_amount(invoice, "igst")
-        state_summary[state_code]["cess"] += extract_tax_amount(invoice, "cess")
+        state_summary[state_code]["taxable_value"] += to_decimal(extract_taxable_value(invoice))
+        state_summary[state_code]["igst"] += to_decimal(extract_tax_amount(invoice, "igst"))
+        state_summary[state_code]["cess"] += to_decimal(extract_tax_amount(invoice, "cess"))
     
     # Process B2CS (need to check if inter-state)
     for invoice in gstr1_tables.get("b2cs", []):
@@ -301,24 +301,24 @@ def calculate_interstate_summary(gstr1_tables: Dict[str, Any]) -> Dict[str, Dict
         if not state_code:
             continue
         
-        state_summary[state_code]["taxable_value"] += extract_taxable_value(invoice)
-        state_summary[state_code]["igst"] += extract_tax_amount(invoice, "igst")
-        state_summary[state_code]["cess"] += extract_tax_amount(invoice, "cess")
+        state_summary[state_code]["taxable_value"] += to_decimal(extract_taxable_value(invoice))
+        state_summary[state_code]["igst"] += to_decimal(extract_tax_amount(invoice, "igst"))
+        state_summary[state_code]["cess"] += to_decimal(extract_tax_amount(invoice, "cess"))
     
     # Process exports (special category)
     for invoice in gstr1_tables.get("exp", []):
         state_code = "96"  # Other Countries
-        state_summary[state_code]["taxable_value"] += extract_taxable_value(invoice)
-        state_summary[state_code]["igst"] += extract_tax_amount(invoice, "igst")
-        state_summary[state_code]["cess"] += extract_tax_amount(invoice, "cess")
+        state_summary[state_code]["taxable_value"] += to_decimal(extract_taxable_value(invoice))
+        state_summary[state_code]["igst"] += to_decimal(extract_tax_amount(invoice, "igst"))
+        state_summary[state_code]["cess"] += to_decimal(extract_tax_amount(invoice, "cess"))
     
-    # Convert to regular dict with rounded values
+    # Convert to regular dict with rounded values (float for JSON serialization)
     result = {}
     for state, values in state_summary.items():
         result[state] = {
-            "taxable_value": round(values["taxable_value"], 2),
-            "igst": round(values["igst"], 2),
-            "cess": round(values["cess"], 2),
+            "taxable_value": decimal_to_float(round_decimal(values["taxable_value"])),
+            "igst": decimal_to_float(round_decimal(values["igst"])),
+            "cess": decimal_to_float(round_decimal(values["cess"])),
         }
     
     return result
@@ -373,298 +373,694 @@ def calculate_nil_exempt_supplies(gstr1_tables: Dict[str, Any]) -> Dict[str, flo
     }
 
 
+# =============================================================================
+# GSTR-2B STUB AND STRICT GSTR-1 TO GSTR-3B TABLE MAPPING FUNCTIONS
+# =============================================================================
+
+def fetch_gstr2b_summary(
+    gstr2b_data: Optional[List[Dict[str, Any]]] = None,
+    period: str = ""
+) -> Dict[str, Any]:
+    """
+    Stub function to fetch GSTR-2B summary for Table 3.1(d).
+    
+    This represents inward supplies liable to reverse charge from GSTR-2B.
+    In production, this would query the GSTR-2B API or database.
+    
+    Args:
+        gstr2b_data: List of GSTR-2B invoice entries (if provided)
+        period: Return period in MMYYYY format
+        
+    Returns:
+        Dictionary with:
+        - Table 3.1(d): Inward supplies data
+        - Table 4A: ITC Available breakdown
+        - Table 4B: ITC Reversed/Blocked
+        - Table 4C: Net ITC Available
+    """
+    logger.info(f"Fetching GSTR-2B summary for period {period}")
+    
+    # Initialize with zero values (all positive values)
+    inward_supplies_rcm = {
+        "taxable_value": Decimal('0'),
+        "igst": Decimal('0'),
+        "cgst": Decimal('0'),
+        "sgst": Decimal('0'),
+        "cess": Decimal('0'),
+    }
+    
+    # ITC Available (4A) - positive ITC from inward supplies
+    itc_available_4a = {
+        "imports_igst": Decimal('0'),
+        "imports_cess": Decimal('0'),
+        "inward_igst": Decimal('0'),
+        "inward_cgst": Decimal('0'),
+        "inward_sgst": Decimal('0'),
+        "inward_cess": Decimal('0'),
+        "rcm_cgst": Decimal('0'),
+        "rcm_sgst": Decimal('0'),
+    }
+    
+    # ITC Reversed (4B) - negative/blocked ITC
+    itc_reversed_4b = {
+        "blocked_credit": Decimal('0'),
+        "ims_rejected": Decimal('0'),
+        "rule_42_reversal": Decimal('0'),
+        "rule_43_reversal": Decimal('0'),
+    }
+    
+    # Process GSTR-2B data if provided
+    if gstr2b_data:
+        for invoice in gstr2b_data:
+            try:
+                # Extract ITC values using Decimal precision
+                igst_itc = to_decimal(invoice.get("igst_itc", 0))
+                cgst_itc = to_decimal(invoice.get("cgst_itc", 0))
+                sgst_itc = to_decimal(invoice.get("sgst_itc", 0))
+                cess_itc = to_decimal(invoice.get("cess_itc", 0))
+                
+                # Only add positive ITC to 4A
+                if igst_itc > 0:
+                    itc_available_4a["inward_igst"] += igst_itc
+                if cgst_itc > 0:
+                    itc_available_4a["inward_cgst"] += cgst_itc
+                if sgst_itc > 0:
+                    itc_available_4a["inward_sgst"] += sgst_itc
+                if cess_itc > 0:
+                    itc_available_4a["inward_cess"] += cess_itc
+                
+                # Extract inward supplies taxable value
+                txval = to_decimal(invoice.get("txval", 0))
+                inward_supplies_rcm["taxable_value"] += txval
+                
+                # Check if RCM applies (negative ITC values)
+                if igst_itc < 0:
+                    itc_reversed_4b["blocked_credit"] += abs(igst_itc)
+                if cgst_itc < 0:
+                    itc_reversed_4b["blocked_credit"] += abs(cgst_itc)
+                if sgst_itc < 0:
+                    itc_reversed_4b["blocked_credit"] += abs(sgst_itc)
+                    
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning(f"Error processing GSTR-2B invoice: {e}")
+                continue
+    
+    # Calculate Net ITC (4C) - 4A minus 4B
+    net_igst_4c = itc_available_4a["inward_igst"] + itc_available_4a["imports_igst"] - itc_reversed_4b["blocked_credit"]
+    net_cgst_4c = itc_available_4a["inward_cgst"] + itc_available_4a["rcm_cgst"]
+    net_sgst_4c = itc_available_4a["inward_sgst"] + itc_available_4a["rcm_sgst"]
+    net_cess_4c = itc_available_4a["inward_cess"] + itc_available_4a["imports_cess"]
+    
+    # Ensure no negative values in net ITC - if negative, it becomes liability
+    if net_igst_4c < 0:
+        itc_reversed_4b["rule_42_reversal"] += abs(net_igst_4c)
+        net_igst_4c = Decimal('0')
+    if net_cgst_4c < 0:
+        itc_reversed_4b["rule_42_reversal"] += abs(net_cgst_4c)
+        net_cgst_4c = Decimal('0')
+    if net_sgst_4c < 0:
+        itc_reversed_4b["rule_42_reversal"] += abs(net_sgst_4c)
+        net_sgst_4c = Decimal('0')
+    
+    return {
+        "inward_supplies": {
+            "taxable_value": decimal_to_float(round_decimal(inward_supplies_rcm["taxable_value"])),
+            "igst": decimal_to_float(round_decimal(inward_supplies_rcm["igst"])),
+            "cgst": decimal_to_float(round_decimal(inward_supplies_rcm["cgst"])),
+            "sgst": decimal_to_float(round_decimal(inward_supplies_rcm["sgst"])),
+            "cess": decimal_to_float(round_decimal(inward_supplies_rcm["cess"])),
+        },
+        "itc_available_4a": {
+            "imports_igst": decimal_to_float(round_decimal(itc_available_4a["imports_igst"])),
+            "imports_cess": decimal_to_float(round_decimal(itc_available_4a["imports_cess"])),
+            "inward_igst": decimal_to_float(round_decimal(itc_available_4a["inward_igst"])),
+            "inward_cgst": decimal_to_float(round_decimal(itc_available_4a["inward_cgst"])),
+            "inward_sgst": decimal_to_float(round_decimal(itc_available_4a["inward_sgst"])),
+            "inward_cess": decimal_to_float(round_decimal(itc_available_4a["inward_cess"])),
+            "rcm_cgst": decimal_to_float(round_decimal(itc_available_4a["rcm_cgst"])),
+            "rcm_sgst": decimal_to_float(round_decimal(itc_available_4a["rcm_sgst"])),
+        },
+        "itc_reversed_4b": {
+            "blocked_credit": decimal_to_float(round_decimal(itc_reversed_4b["blocked_credit"])),
+            "ims_rejected": decimal_to_float(round_decimal(itc_reversed_4b["ims_rejected"])),
+            "rule_42_reversal": decimal_to_float(round_decimal(itc_reversed_4b["rule_42_reversal"])),
+            "rule_43_reversal": decimal_to_float(round_decimal(itc_reversed_4b["rule_43_reversal"])),
+        },
+        "net_itc_4c": {
+            "igst": decimal_to_float(round_decimal(net_igst_4c)),
+            "cgst": decimal_to_float(round_decimal(net_cgst_4c)),
+            "sgst": decimal_to_float(round_decimal(net_sgst_4c)),
+            "cess": decimal_to_float(round_decimal(net_cess_4c)),
+        },
+    }
+
+
+def calculate_gstr1_outward_taxable_supplies(
+    gstr1_tables: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Calculate Table 3.1(a) - Outward taxable supplies (other than zero rated, nil rated, exempted).
+    
+    STRICT MAPPING: Sum values from GSTR-1 Tables 4 (B2B), 5 (B2CL), 6C (B2CS standard rated),
+    7 & 9 (CDNR/CDNUR with positive values).
+    
+    COMPLIANCE RULE: If net value is negative, default to zero.
+    
+    Returns:
+        Dictionary with all tax components (IGST, CGST, SGST, CESS)
+    """
+    total_txval = Decimal('0')
+    total_igst = Decimal('0')
+    total_cgst = Decimal('0')
+    total_sgst = Decimal('0')
+    total_cess = Decimal('0')
+    count = 0
+    
+    # Table 4 - B2B invoices
+    for gstin_entry in gstr1_tables.get("b2b", []):
+        invoices = gstin_entry.get("invoices", [])
+        for invoice in invoices:
+            txval = to_decimal(invoice.get("txval", 0))
+            igst = to_decimal(invoice.get("igst", 0))
+            cgst = to_decimal(invoice.get("cgst", 0))
+            sgst = to_decimal(invoice.get("sgst", 0))
+            cess = to_decimal(invoice.get("cess", 0))
+            
+            # Only include positive values per compliance rule
+            if txval > 0:
+                total_txval += txval
+                total_igst += igst
+                total_cgst += cgst
+                total_sgst += sgst
+                total_cess += cess
+                count += 1
+    
+    # Table 5 - B2CL invoices (IGST and CESS only for inter-state)
+    for invoice in gstr1_tables.get("b2cl", []):
+        txval = to_decimal(invoice.get("txval", 0))
+        igst = to_decimal(invoice.get("igst", 0))
+        cess = to_decimal(invoice.get("cess", 0))
+        
+        if txval > 0:
+            total_txval += txval
+            total_igst += igst
+            total_cess += cess
+            count += 1
+    
+    # Table 6C - B2CS standard rated (CGST+SGST or IGST)
+    for invoice in gstr1_tables.get("b2cs", []):
+        txval = to_decimal(invoice.get("txval", 0))
+        igst = to_decimal(invoice.get("igst", 0))
+        cgst = to_decimal(invoice.get("cgst", 0))
+        sgst = to_decimal(invoice.get("sgst", 0))
+        cess = to_decimal(invoice.get("cess", 0))
+        rate = to_decimal(invoice.get("rate", 0))
+        
+        # Exclude zero-rated and nil-rated (they go to 3.1(b) and 3.1(c))
+        if txval > 0 and rate > 0:
+            total_txval += txval
+            total_igst += igst
+            total_cgst += cgst
+            total_sgst += sgst
+            total_cess += cess
+            count += 1
+    
+    # Table 7 & 9 - CDNR and amendments (positive values only)
+    for cdn_entry in gstr1_tables.get("cdnr", []):
+        notes = cdn_entry.get("notes", [])
+        for note in notes:
+            txval = to_decimal(note.get("txval", 0))
+            igst = to_decimal(note.get("igst", 0))
+            cgst = to_decimal(note.get("cgst", 0))
+            sgst = to_decimal(note.get("sgst", 0))
+            cess = to_decimal(note.get("cess", 0))
+            
+            # Only add if net value is positive
+            if txval > 0:
+                total_txval += txval
+                total_igst += igst
+                total_cgst += cgst
+                total_sgst += sgst
+                total_cess += cess
+                count += 1
+    
+    # Table 9 - CDNUR amendments
+    for note in gstr1_tables.get("cdnur", []):
+        txval = to_decimal(note.get("txval", 0))
+        igst = to_decimal(note.get("igst", 0))
+        cgst = to_decimal(note.get("cgst", 0))
+        sgst = to_decimal(note.get("sgst", 0))
+        cess = to_decimal(note.get("cess", 0))
+        
+        if txval > 0:
+            total_txval += txval
+            total_igst += igst
+            total_cgst += cgst
+            total_sgst += sgst
+            total_cess += cess
+            count += 1
+    
+    return {
+        "count": count,
+        "taxable_value": decimal_to_float(round_decimal(total_txval)),
+        "igst": decimal_to_float(round_decimal(total_igst)),
+        "cgst": decimal_to_float(round_decimal(total_cgst)),
+        "sgst": decimal_to_float(round_decimal(total_sgst)),
+        "cess": decimal_to_float(round_decimal(total_cess)),
+    }
+
+
+def calculate_gstr1_zero_rated_supplies(
+    gstr1_tables: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Calculate Table 3.1(b) - Zero-rated supplies (exports) and deemed exports.
+    
+    STRICT MAPPING: Sum values from GSTR-1 Tables 6A (EXP), 6B (EXPWP), and 9 (amendments to exports).
+    
+    COMPLIANCE RULE: Only include invoices with 0% rate. If net value is negative, default to zero.
+    
+    Returns:
+        Dictionary with export details
+    """
+    total_txval = Decimal('0')
+    total_igst = Decimal('0')
+    total_cess = Decimal('0')
+    count = 0
+    
+    # Table 6A/6B - EXP table (exports)
+    for invoice in gstr1_tables.get("exp", []):
+        txval = to_decimal(invoice.get("txval", 0))
+        igst = to_decimal(invoice.get("igst", 0))
+        cess = to_decimal(invoice.get("cess", 0))
+        rate = to_decimal(invoice.get("rate", 0))
+        
+        # Only include zero-rated exports
+        if txval > 0 and rate == 0:
+            total_txval += txval
+            total_igst += igst  # Usually 0 for exports
+            total_cess += cess
+            count += 1
+    
+    # Table 9 - amendments to exports (CDNR with rate=0)
+    for cdn_entry in gstr1_tables.get("cdnr", []):
+        notes = cdn_entry.get("notes", [])
+        for note in notes:
+            # Check if this is an export amendment
+            rate = to_decimal(note.get("rate", 0))
+            if rate == 0:
+                txval = to_decimal(note.get("txval", 0))
+                igst = to_decimal(note.get("igst", 0))
+                cess = to_decimal(note.get("cess", 0))
+                
+                if txval > 0:
+                    total_txval += txval
+                    total_igst += igst
+                    total_cess += cess
+                    count += 1
+    
+    return {
+        "count": count,
+        "taxable_value": decimal_to_float(round_decimal(total_txval)),
+        "igst": decimal_to_float(round_decimal(total_igst)),
+        "cess": decimal_to_float(round_decimal(total_cess)),
+    }
+
+
+def calculate_gstr1_nil_exempt_non_gst_supplies(
+    gstr1_tables: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Calculate Table 3.1(c) - Nil-rated, exempted, and non-GST supplies.
+    Also provides input for Table 3.1(e) - Non-GST outward supplies.
+    
+    STRICT MAPPING: Values from GSTR-1 Table 8 (nil-rated, exempted, non-GST).
+    
+    COMPLIANCE RULE: Only include invoices with 0% rate or explicit nil/exempt designation.
+    If net value is negative, default to zero.
+    
+    Returns:
+        Dictionary with nil-rated, exempted, and non-GST breakdown
+    """
+    nil_rated = Decimal('0')
+    exempted = Decimal('0')
+    non_gst = Decimal('0')
+    count = 0
+    
+    # Table 8 - Nil-rated, exempted, non-GST supplies from B2CS
+    for invoice in gstr1_tables.get("b2cs", []):
+        rate = to_decimal(invoice.get("rate", 0))
+        txval = to_decimal(invoice.get("txval", 0))
+        
+        # Check for nil-rated (0%) or exempt flag
+        is_exempt = invoice.get("is_exempt", False)
+        is_nil = invoice.get("is_nil", False)
+        supply_type = invoice.get("supply_type", "")
+        
+        if txval > 0:
+            if rate == 0 or is_nil:
+                nil_rated += txval
+                count += 1
+            elif is_exempt or supply_type == "exempt":
+                exempted += txval
+                count += 1
+            elif supply_type == "non_gst":
+                non_gst += txval
+                count += 1
+    
+    # Also check CDNR for nil/exempt amendments
+    for cdn_entry in gstr1_tables.get("cdnr", []):
+        notes = cdn_entry.get("notes", [])
+        for note in notes:
+            rate = to_decimal(note.get("rate", 0))
+            txval = to_decimal(note.get("txval", 0))
+            is_exempt = note.get("is_exempt", False)
+            is_nil = note.get("is_nil", False)
+            
+            if txval > 0:
+                if rate == 0 or is_nil:
+                    nil_rated += txval
+                    count += 1
+                elif is_exempt:
+                    exempted += txval
+                    count += 1
+    
+    return {
+        "count": count,
+        "taxable_value": decimal_to_float(round_decimal(nil_rated + exempted + non_gst)),
+        "nil_rated": decimal_to_float(round_decimal(nil_rated)),
+        "exempted": decimal_to_float(round_decimal(exempted)),
+        "non_gst": decimal_to_float(round_decimal(non_gst)),
+    }
+
+
 def generate_gstr3b_summary(
     gstr1_tables: Dict[str, Any],
     return_period: str = "",
     taxpayer_gstin: str = "",
     taxpayer_name: str = "",
+    gstr2b_data: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
-    Convert GSTR-1 tables into GSTR-3B monthly summary format.
+    REFACTORED: Convert GSTR-1 tables into GSTR-3B monthly summary format.
+    
+    This function implements STRICT GST LAW COMPLIANCE with:
+    - Precise GSTR-1 to GSTR-3B table mapping (Rules 37-47)
+    - Decimal precision (2 decimal places) for all tax calculations
+    - Compliance rule: Negative values default to zero
+    - Full ITC lifecycle (4A Available → 4B Reversed → 4C Net)
+    - Explicit omission of Table 5 and 6.2 from auto-population
     
     Args:
         gstr1_tables: Dictionary with b2b, b2cl, b2cs, exp, cdnr, cdnur tables
         return_period: Return period in MMYYYY format
         taxpayer_gstin: Taxpayer's GSTIN
         taxpayer_name: Taxpayer's name
+        gstr2b_data: Optional GSTR-2B invoices for ITC calculation
     
     Returns:
-        GSTR-3B summary dictionary with all required fields
+        GSTR-3B summary dictionary with all required sections and tables
     """
-    logger.info("Generating GSTR-3B summary from GSTR-1 tables")
+    logger.info("Generating GSTR-3B summary from GSTR-1 tables (Strict Compliance Mode)")
     
-    # Calculate 3.1(a) - Outward taxable supplies (B2B + B2CL + B2CS)
-    b2b_total = sum_b2b_invoices(gstr1_tables)
-    b2cl_total = sum_table_values(gstr1_tables.get("b2cl", []))
-    b2cs_total = sum_table_values(gstr1_tables.get("b2cs", []))
+    # =========================================================================
+    # SECTION 3.1 - DETAILS OF OUTWARD SUPPLIES (with Decimal precision)
+    # =========================================================================
     
-    taxable_supplies = {
-        "taxable_value": round(
-            b2b_total["taxable_value"] + 
-            b2cl_total["taxable_value"] + 
-            b2cs_total["taxable_value"], 
-            2
-        ),
-        "igst": round(
-            b2b_total["igst"] + 
-            b2cl_total["igst"] + 
-            b2cs_total["igst"], 
-            2
-        ),
-        "cgst": round(
-            b2b_total["cgst"] + 
-            b2cl_total["cgst"] + 
-            b2cs_total["cgst"], 
-            2
-        ),
-        "sgst": round(
-            b2b_total["sgst"] + 
-            b2cl_total["sgst"] + 
-            b2cs_total["sgst"], 
-            2
-        ),
-        "cess": round(
-            b2b_total["cess"] + 
-            b2cl_total["cess"] + 
-            b2cs_total["cess"], 
-            2
-        ),
-    }
+    # Table 3.1(a) - OUTWARD TAXABLE SUPPLIES (Tables 4, 5, 6C, 7, 9)
+    section_3_1_a = calculate_gstr1_outward_taxable_supplies(gstr1_tables)
     
-    # Calculate 3.1(b) - Zero-rated exports
-    exp_total = sum_table_values(gstr1_tables.get("exp", []))
+    # Table 3.1(b) - ZERO-RATED SUPPLIES (Tables 6A, 6B, 9)
+    section_3_1_b = calculate_gstr1_zero_rated_supplies(gstr1_tables)
     
-    # Calculate 3.1(c) - Nil-rated, exempted, non-GST supplies
-    nil_exempt = calculate_nil_exempt_supplies(gstr1_tables)
+    # Table 3.1(c) - NIL-RATED, EXEMPTED, NON-GST (Table 8)
+    section_3_1_c = calculate_gstr1_nil_exempt_non_gst_supplies(gstr1_tables)
     
-    # Calculate 3.1(d) - Inward supplies (RCM) - placeholder
-    rcm_inward = {
-        "taxable_value": 0.0,
-        "igst": 0.0,
-        "cgst": 0.0,
-        "sgst": 0.0,
-        "cess": 0.0,
-    }
+    # Table 3.1(d) - INWARD SUPPLIES (RCM) - from GSTR-2B via stub function
+    gstr2b_summary = fetch_gstr2b_summary(gstr2b_data, return_period)
+    section_3_1_d = gstr2b_summary["inward_supplies"]
     
-    # Calculate 3.1(e) - Non-GST outward supplies
-    non_gst_outward = {
-        "taxable_value": 0.0,
+    # Table 3.1(e) - NON-GST OUTWARD SUPPLIES - same as 3.1(c) non_gst component
+    section_3_1_e = {
+        "taxable_value": section_3_1_c["non_gst"],
         "tax": 0.0,
     }
     
-    # Calculate 3.2 - Inter-state supplies to unregistered persons
-    # B2CL + B2CS (inter-state) grouped by state
+    # =========================================================================
+    # SECTION 3.2 - INTER-STATE SUPPLIES TO UNREGISTERED PERSONS
+    # =========================================================================
+    
     interstate_summary = calculate_interstate_summary(gstr1_tables)
-    
-    # Calculate 4 - Tax on inward supplies (RCM)
-    # Same as 3.1(d) for now
-    rcm_tax = {
-        "igst": 0.0,
-        "cgst": 0.0,
-        "sgst": 0.0,
-        "cess": 0.0,
+    section_3_2 = {
+        "description": "Supplies made to Unregistered Persons (B2C)",
+        "summary": interstate_summary,
+        "total_taxable_value": round(
+            sum(v.get("taxable_value", 0) for v in interstate_summary.values()), 2
+        ),
+        "total_igst": round(
+            sum(v.get("igst", 0) for v in interstate_summary.values()), 2
+        ),
     }
     
-    # Calculate 5 - ITC claimed
-    itc_claimed = {
-        "igst": 0.0,
-        "cgst": 0.0,
-        "sgst": 0.0,
-        "cess": 0.0,
+    # =========================================================================
+    # SECTION 4 - ITC LIFECYCLE (4A Available → 4B Reversed → 4C Net)
+    # =========================================================================
+    
+    # Extract ITC from GSTR-2B summary
+    itc_4a = gstr2b_summary["itc_available_4a"]
+    itc_4b = gstr2b_summary["itc_reversed_4b"]
+    itc_4c = gstr2b_summary["net_itc_4c"]
+    
+    # Section 4A - ITC Available
+    section_4a = {
+        "description": "ITC Available - 4A",
+        "imports_igst": itc_4a["imports_igst"],
+        "imports_cess": itc_4a["imports_cess"],
+        "inward_igst": itc_4a["inward_igst"],
+        "inward_cgst": itc_4a["inward_cgst"],
+        "inward_sgst": itc_4a["inward_sgst"],
+        "inward_cess": itc_4a["inward_cess"],
+        "rcm_cgst": itc_4a["rcm_cgst"],
+        "rcm_sgst": itc_4a["rcm_sgst"],
+        "total_igst": round(itc_4a["inward_igst"] + itc_4a["imports_igst"], 2),
+        "total_cgst": round(itc_4a["inward_cgst"] + itc_4a["rcm_cgst"], 2),
+        "total_sgst": round(itc_4a["inward_sgst"] + itc_4a["rcm_sgst"], 2),
+        "total_cess": round(itc_4a["inward_cess"] + itc_4a["imports_cess"], 2),
     }
     
-    # Calculate 6 - ITC reversed
-    itc_reversed = {
-        "igst": 0.0,
-        "cgst": 0.0,
-        "sgst": 0.0,
-        "cess": 0.0,
+    # Section 4B - ITC Reversed
+    section_4b = {
+        "description": "ITC Reversed / Blocked - 4B",
+        "blocked_credit": itc_4b["blocked_credit"],
+        "ims_rejected": itc_4b["ims_rejected"],
+        "rule_42_reversal": itc_4b["rule_42_reversal"],
+        "rule_43_reversal": itc_4b["rule_43_reversal"],
+        "total_reversed": round(
+            itc_4b["blocked_credit"] + 
+            itc_4b["ims_rejected"] + 
+            itc_4b["rule_42_reversal"] + 
+            itc_4b["rule_43_reversal"],
+            2
+        ),
     }
     
-    # Calculate 7 - Net ITC available
-    net_itc = {
-        "igst": 0.0,
-        "cgst": 0.0,
-        "sgst": 0.0,
-        "cess": 0.0,
+    # Section 4C - Net ITC Available
+    section_4c = {
+        "description": "Net ITC Available - 4C",
+        "igst": itc_4c["igst"],
+        "cgst": itc_4c["cgst"],
+        "sgst": itc_4c["sgst"],
+        "cess": itc_4c["cess"],
+        "total": round(itc_4c["igst"] + itc_4c["cgst"] + itc_4c["sgst"] + itc_4c["cess"], 2),
     }
     
-    # Calculate 8 - Tax liability (outward + RCM)
+    # =========================================================================
+    # TAX LIABILITY CALCULATION
+    # =========================================================================
+    
+    # Total tax on outward supplies
+    total_outward_tax = {
+        "igst": round(section_3_1_a["igst"] + section_3_1_b["igst"], 2),
+        "cgst": round(section_3_1_a["cgst"], 2),
+        "sgst": round(section_3_1_a["sgst"], 2),
+        "cess": round(section_3_1_a["cess"] + section_3_1_b["cess"], 2),
+    }
+    
+    # Tax on RCM inward supplies
+    total_rcm_tax = {
+        "igst": section_3_1_d["igst"],
+        "cgst": section_3_1_d["cgst"],
+        "sgst": section_3_1_d["sgst"],
+        "cess": section_3_1_d["cess"],
+    }
+    
+    # Total tax liability (before ITC)
     tax_liability = {
-        "igst": round(taxable_supplies["igst"] + exp_total["igst"] + rcm_inward["igst"], 2),
-        "cgst": round(taxable_supplies["cgst"] + rcm_inward["cgst"], 2),
-        "sgst": round(taxable_supplies["sgst"] + rcm_inward["sgst"], 2),
-        "cess": round(taxable_supplies["cess"] + exp_total["cess"] + rcm_inward["cess"], 2),
+        "igst": round(total_outward_tax["igst"] + total_rcm_tax["igst"], 2),
+        "cgst": round(total_outward_tax["cgst"] + total_rcm_tax["cgst"], 2),
+        "sgst": round(total_outward_tax["sgst"] + total_rcm_tax["sgst"], 2),
+        "cess": round(total_outward_tax["cess"] + total_rcm_tax["cess"], 2),
     }
     
-    # Calculate 9 - Interest and late fee
-    interest_late_fee = {
+    # Tax payable (after ITC)
+    tax_payable = {
+        "igst": max(0, round(tax_liability["igst"] - section_4c["igst"], 2)),
+        "cgst": max(0, round(tax_liability["cgst"] - section_4c["cgst"], 2)),
+        "sgst": max(0, round(tax_liability["sgst"] - section_4c["sgst"], 2)),
+        "cess": max(0, round(tax_liability["cess"] - section_4c["cess"], 2)),
+    }
+    
+    # =========================================================================
+    # INTEREST AND LATE FEE (Section 6 - OMITTED from auto-population)
+    # =========================================================================
+    
+    # NOTE: Section 5 (Exempt Supplies) and Section 6.2 (Interest) are
+    # explicitly omitted from auto-population as per compliance rules.
+    # These must be populated manually by the taxpayer.
+    
+    section_6 = {
+        "description": "Interest and Late Fee - Section 6 (MANUAL ENTRY ONLY)",
         "interest": {
             "igst": 0.0,
             "cgst": 0.0,
             "sgst": 0.0,
             "cess": 0.0,
         },
-        "late_fee": {
-            "igst": 0.0,
-            "cgst": 0.0,
-            "sgst": 0.0,
-            "cess": 0.0,
-        },
+        "late_fee": 0.0,
+        "note": "This section must be populated manually based on GSTN communications",
     }
     
-    # Calculate 10 - Payable
-    tax_payable = {
-        "igst": round(tax_liability["igst"] - net_itc["igst"], 2),
-        "cgst": round(tax_liability["cgst"] - net_itc["cgst"], 2),
-        "sgst": round(tax_liability["sgst"] - net_itc["sgst"], 2),
-        "cess": round(tax_liability["cess"] - net_itc["cess"], 2),
-    }
+    # =========================================================================
+    # BUILD COMPLETE GSTR-3B SUMMARY PAYLOAD
+    # =========================================================================
     
-    # Build complete GSTR-3B summary
     gstr3b_summary = {
-        "gstin": taxpayer_gstin,
-        "ret_period": return_period,
-        "taxpayer_name": taxpayer_name,
-        
-        # Section 3.1 - Details of Outward Supplies
-        "3_1_a": {
-            "description": "Outward taxable supplies (other than zero rated, nil rated and exempted)",
-            **taxable_supplies,
-        },
-        "3_1_b": {
-            "description": "Zero rated supplies (exports) and Deemed Exports",
-            **exp_total,
-        },
-        "3_1_c": {
-            "description": "Nil rated, exempted and non-GST supplies",
-            "taxable_value": nil_exempt["nil_rated"] + nil_exempt["exempted"] + nil_exempt["non_gst"],
-            "nil_rated": nil_exempt["nil_rated"],
-            "exempted": nil_exempt["exempted"],
-            "non_gst": nil_exempt["non_gst"],
-        },
-        "3_1_d": {
-            "description": "Inward supplies (liable to reverse charge)",
-            **rcm_inward,
-        },
-        "3_1_e": {
-            "description": "Non-GST outward supplies",
-            **non_gst_outward,
+        "metadata": {
+            "gstin": taxpayer_gstin,
+            "ret_period": return_period,
+            "taxpayer_name": taxpayer_name,
+            "filing_mode": "auto_populated",
+            "generation_mode": "strict_compliance",
+            "timestamp": datetime.now().isoformat(),
         },
         
-        # Section 3.2 - Inter-state supplies to unregistered persons
-        "3_2": {
-            "description": "Supplies made to Unregistered Persons (B2C)",
-            "summary": interstate_summary,
-            "total_taxable_value": round(
-                sum(v["taxable_value"] for v in interstate_summary.values()), 2
-            ),
-            "total_igst": round(
-                sum(v["igst"] for v in interstate_summary.values()), 2
-            ),
+        # Section 3 - Outward Supplies
+        "section_3": {
+            "3_1_a": {
+                "description": "Outward taxable supplies (other than zero rated, nil rated and exempted)",
+                **{k: v for k, v in section_3_1_a.items() if k != "count"},
+                "invoice_count": section_3_1_a["count"],
+                "source": "GSTR-1 Tables 4, 5, 6C, 7, 9",
+            },
+            "3_1_b": {
+                "description": "Zero rated supplies (exports) and Deemed Exports",
+                **{k: v for k, v in section_3_1_b.items() if k != "count"},
+                "invoice_count": section_3_1_b["count"],
+                "source": "GSTR-1 Tables 6A, 6B, 9",
+            },
+            "3_1_c": {
+                "description": "Nil rated, exempted and non-GST supplies",
+                **{k: v for k, v in section_3_1_c.items() if k != "count"},
+                "invoice_count": section_3_1_c["count"],
+                "source": "GSTR-1 Table 8",
+            },
+            "3_1_d": {
+                "description": "Inward supplies (liable to reverse charge)",
+                **section_3_1_d,
+                "source": "GSTR-2B (Stub Function)",
+            },
+            "3_1_e": {
+                "description": "Non-GST outward supplies",
+                **section_3_1_e,
+                "source": "GSTR-1 Table 8",
+            },
+            "3_2": section_3_2,
         },
         
-        # Section 4 - Tax on inward supplies (RCM)
-        "4": {
-            "description": "Tax liability (Reverse Charge) on inward supplies",
-            **rcm_tax,
+        # Section 4 - Input Tax Credit
+        "section_4": {
+            "4a": section_4a,
+            "4b": section_4b,
+            "4c": section_4c,
+            "note": "ITC flow: 4A (Available) → 4B (Reversed) → 4C (Net)",
         },
         
-        # Section 5 - ITC claimed
-        "5": {
-            "description": "Input Tax Credit claimed",
-            **itc_claimed,
+        # Section 5 - Exempt Supplies (OMITTED from auto-population)
+        "section_5": {
+            "description": "Exempt Supplies - MANUAL ENTRY ONLY",
+            "auto_populated": False,
+            "note": "Section 5 must be populated manually by taxpayer",
         },
         
-        # Section 6 - ITC reversed
-        "6": {
-            "description": " ITC Reversed",
-            **itc_reversed,
+        # Section 6 - Interest and Late Fee (OMITTED from auto-population)
+        "section_6": section_6,
+        
+        # Tax Calculation Summary
+        "tax_summary": {
+            "outward_tax_liability": {
+                **total_outward_tax,
+                "total": round(
+                    total_outward_tax["igst"] +
+                    total_outward_tax["cgst"] +
+                    total_outward_tax["sgst"] +
+                    total_outward_tax["cess"],
+                    2
+                ),
+            },
+            "rcm_tax_liability": {
+                **total_rcm_tax,
+                "total": round(
+                    total_rcm_tax["igst"] +
+                    total_rcm_tax["cgst"] +
+                    total_rcm_tax["sgst"] +
+                    total_rcm_tax["cess"],
+                    2
+                ),
+            },
+            "total_liability": {
+                **tax_liability,
+                "total": round(
+                    tax_liability["igst"] +
+                    tax_liability["cgst"] +
+                    tax_liability["sgst"] +
+                    tax_liability["cess"],
+                    2
+                ),
+            },
+            "total_itc": {
+                **section_4c,
+            },
+            "total_payable": {
+                **tax_payable,
+                "total": round(
+                    tax_payable["igst"] +
+                    tax_payable["cgst"] +
+                    tax_payable["sgst"] +
+                    tax_payable["cess"],
+                    2
+                ),
+            },
         },
         
-        # Section 7 - Net ITC available
-        "7": {
-            "description": "Net ITC Available",
-            **net_itc,
-        },
-        
-        # Section 8 - Tax liability payable
-        "8": {
-            "description": "Tax Payable on Outward Supplies (including RCM)",
-            **tax_liability,
-        },
-        
-        # Section 9 - Interest and late fee
-        "9": interest_late_fee,
-        
-        # Section 10 - Tax payable after ITC
-        "10": {
-            "description": "Payable Amount after ITC",
-            **tax_payable,
-        },
-        
-        # Summary totals
-        "total_liability": {
-            "igst": round(tax_liability["igst"], 2),
-            "cgst": round(tax_liability["cgst"], 2),
-            "sgst": round(tax_liability["sgst"], 2),
-            "cess": round(tax_liability["cess"], 2),
-            "total": round(
-                tax_liability["igst"] + 
-                tax_liability["cgst"] + 
-                tax_liability["sgst"] + 
-                tax_liability["cess"], 
-                2
-            ),
-        },
-        "total_itc": {
-            "igst": round(net_itc["igst"], 2),
-            "cgst": round(net_itc["cgst"], 2),
-            "sgst": round(net_itc["sgst"], 2),
-            "cess": round(net_itc["cess"], 2),
-            "total": round(
-                net_itc["igst"] + 
-                net_itc["cgst"] + 
-                net_itc["sgst"] + 
-                net_itc["cess"], 
-                2
-            ),
-        },
-        "total_payable": {
-            "igst": round(tax_payable["igst"], 2),
-            "cgst": round(tax_payable["cgst"], 2),
-            "sgst": round(tax_payable["sgst"], 2),
-            "cess": round(tax_payable["cess"], 2),
-            "total": round(
-                tax_payable["igst"] + 
-                tax_payable["cgst"] + 
-                tax_payable["sgst"] + 
-                tax_payable["cess"], 
-                2
-            ),
-        },
-        
-        # Invoice counts
-        "invoice_counts": {
-            "b2b": b2b_total["count"],
-            "b2cl": b2cl_total["count"],
-            "b2cs": b2cs_total["count"],
-            "exp": exp_total["count"],
-            "cdnr": sum(
-                len(entry.get("notes", [])) 
-                for entry in gstr1_tables.get("cdnr", [])
-            ),
-            "cdnur": len(gstr1_tables.get("cdnur", [])),
+        # Compliance Flags
+        "compliance": {
+            "strict_mapping_applied": True,
+            "decimal_precision": "2 decimal places",
+            "negative_values_rule": "Default to zero",
+            "auto_populated_sections": ["3_1_a", "3_1_b", "3_1_c", "3_1_d", "3_1_e", "3_2", "4a", "4b", "4c"],
+            "manual_entry_sections": ["section_5", "section_6"],
         },
     }
     
     logger.info(
-        f"GSTR-3B summary generated: "
-        f"Total liability: {gstr3b_summary['total_liability']['total']}, "
-        f"Total ITC: {gstr3b_summary['total_itc']['total']}"
+        f"GSTR-3B summary generated (Strict Compliance): "
+        f"Total liability: {gstr3b_summary['tax_summary']['total_liability']['total']}, "
+        f"Total ITC: {gstr3b_summary['tax_summary']['total_itc']['total']}, "
+        f"Total Payable: {gstr3b_summary['tax_summary']['total_payable']['total']}"
     )
     
     return gstr3b_summary
+
 
 
 def generate_gstr3b_json(
@@ -672,6 +1068,7 @@ def generate_gstr3b_json(
     return_period: str = "",
     taxpayer_gstin: str = "",
     taxpayer_name: str = "",
+    gstr2b_data: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Generate complete GSTR-3B JSON payload for government filing.
@@ -683,6 +1080,7 @@ def generate_gstr3b_json(
         return_period,
         taxpayer_gstin,
         taxpayer_name,
+        gstr2b_data,
     )
     
     # Add filing metadata
@@ -690,7 +1088,9 @@ def generate_gstr3b_json(
         "gstin": taxpayer_gstin,
         "ret_period": return_period,
         "gst_user_name": taxpayer_name,
-        "gstr1_summary": summary,
+        "gstr3b_summary": summary,
+        "compliance_certified": False,
+        "note": "This payload is auto-populated. Sections 5 and 6 require manual entry before final filing.",
     }
     
     return gstr3b_json

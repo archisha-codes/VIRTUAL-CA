@@ -322,6 +322,206 @@ class GSTR3BResponse(BaseModel):
     created_at: datetime
 
 
+# ============================================================================
+# GSTR-3B AUTO-POPULATION RESPONSE SCHEMAS (Enhanced)
+# ============================================================================
+
+class TaxAmount(BaseModel):
+    """Standard tax amount structure with IGST, CGST, SGST, CESS"""
+    igst: float = Field(default=0.0, ge=0.0, description="Integrated GST")
+    cgst: float = Field(default=0.0, ge=0.0, description="Central GST")
+    sgst: float = Field(default=0.0, ge=0.0, description="State GST")
+    cess: float = Field(default=0.0, ge=0.0, description="Cess")
+
+
+class SupplyTable(BaseModel):
+    """Standard supply table structure with status tracking"""
+    taxable_value: float = Field(default=0.0, ge=0.0, description="Total taxable value")
+    igst: float = Field(default=0.0, ge=0.0)
+    cgst: float = Field(default=0.0, ge=0.0)
+    sgst: float = Field(default=0.0, ge=0.0)
+    cess: float = Field(default=0.0, ge=0.0)
+    invoice_count: int = Field(default=0, ge=0, description="Number of invoices")
+    credit_note_count: int = Field(default=0, ge=0, description="Number of credit notes")
+    source: str = Field(default="", description="Data source (e.g., GSTR-1 Tables 4, 5, 6C)")
+    status: Literal["Filed", "Not filed", "Partial"] = Field(default="Not filed", description="Filing status")
+
+
+class OutwardSupplies(BaseModel):
+    """Section 3.1 - Details of Outward Supplies"""
+    
+    table_3_1_a: SupplyTable = Field(
+        ..., 
+        description="Outward taxable supplies (other than zero rated, nil rated and exempted)"
+    )
+    table_3_1_b: SupplyTable = Field(
+        ..., 
+        description="Zero rated supplies (exports) and Deemed Exports"
+    )
+    table_3_1_c: SupplyTable = Field(
+        ..., 
+        description="Nil rated, exempted and non-GST supplies"
+    )
+    table_3_1_d: SupplyTable = Field(
+        ..., 
+        description="Inward supplies (liable to reverse charge)"
+    )
+    table_3_1_e: SupplyTable = Field(
+        ..., 
+        description="Non-GST outward supplies"
+    )
+
+
+class InterStateSupplies(BaseModel):
+    """Section 3.2 - Inter-State Supplies to Unregistered Persons"""
+    description: str = "Supplies made to Unregistered Persons (B2C)"
+    summary: Dict[str, Dict[str, float]] = Field(default_factory=dict, description="State-wise breakdown")
+    total_taxable_value: float = 0.0
+    total_igst: float = 0.0
+    status: Literal["Filed", "Not filed"] = "Not filed"
+
+
+class ITCSection(BaseModel):
+    """Base structure for ITC sections"""
+    available_igst: float = 0.0
+    available_cgst: float = 0.0
+    available_sgst: float = 0.0
+    available_cess: float = 0.0
+    blocked_igst: float = 0.0
+    blocked_cgst: float = 0.0
+    blocked_sgst: float = 0.0
+    blocked_cess: float = 0.0
+
+
+class ITCDetails(BaseModel):
+    """Section 4 - Input Tax Credit"""
+    section_4a: Dict[str, Any] = Field(
+        default_factory=dict, 
+        description="ITC Available - 4A (imports and inward supplies)"
+    )
+    section_4b: Dict[str, Any] = Field(
+        default_factory=dict, 
+        description="ITC Reversed/Blocked - 4B (reversals and disallowances)"
+    )
+    section_4c: Dict[str, Any] = Field(
+        default_factory=dict, 
+        description="Net ITC Available - 4C (4A minus 4B)"
+    )
+    status: Literal["Generated", "Not generated", "Partial"] = "Not generated"
+    note: str = "ITC flow: 4A (Available) → 4B (Reversed) → 4C (Net)"
+
+
+class TaxSummary(BaseModel):
+    """Tax calculation summary"""
+    outward_tax_liability: TaxAmount = Field(default_factory=TaxAmount)
+    rcm_tax_liability: TaxAmount = Field(default_factory=TaxAmount)
+    total_liability: TaxAmount = Field(default_factory=TaxAmount)
+    total_itc: TaxAmount = Field(default_factory=TaxAmount)
+    total_payable: TaxAmount = Field(default_factory=TaxAmount)
+
+
+class ComplianceMetadata(BaseModel):
+    """Compliance and metadata information"""
+    strict_mapping_applied: bool = True
+    decimal_precision: str = "2 decimal places"
+    negative_values_rule: str = "Default to zero"
+    auto_populated_sections: List[str] = Field(
+        default=["3.1a", "3.1b", "3.1c", "3.1d", "3.1e", "3.2", "4a", "4b", "4c"]
+    )
+    manual_entry_sections: List[str] = Field(
+        default=["Section 5", "Section 6"]
+    )
+
+
+class FilingStatusFlags(BaseModel):
+    """Status flags indicating data availability"""
+    gstr1_filed: bool = Field(
+        False, 
+        description="GSTR-1 filed flag. If false, outward supply tables (3.1a-e, 3.2) return 'Not filed'"
+    )
+    gstr2b_generated: bool = Field(
+        False, 
+        description="GSTR-2B generated flag. If false, inward supply (3.1d) and ITC (4) return 'Not generated'"
+    )
+
+
+class GSTR3BAutoPopulateResponse(BaseModel):
+    """
+    Comprehensive GSTR-3B auto-population response with status flags.
+    
+    This response includes:
+    - All auto-populated sections from GSTR-1 and GSTR-2B
+    - Status flags indicating data availability
+    - Separation of invoices from credit notes within same month
+    - Complete tax computation summary
+    - Compliance metadata
+    """
+    
+    # Metadata
+    metadata: Dict[str, Any] = Field(
+        ..., 
+        description="Metadata including GSTIN, return period, filing mode"
+    )
+    
+    # Filing status flags
+    filing_status: FilingStatusFlags = Field(
+        ..., 
+        description="Status flags for GSTR-1 and GSTR-2B data availability"
+    )
+    
+    # Section 3 - Outward Supplies
+    section_3_1: OutwardSupplies = Field(
+        ..., 
+        description="Section 3.1 - Details of Outward Supplies"
+    )
+    section_3_2: InterStateSupplies = Field(
+        ..., 
+        description="Section 3.2 - Inter-State Supplies to Unregistered Persons"
+    )
+    
+    # Section 4 - ITC
+    section_4: ITCDetails = Field(
+        ..., 
+        description="Section 4 - Input Tax Credit (ITC) with status flag"
+    )
+    
+    # Tax Summary
+    tax_summary: TaxSummary = Field(
+        ..., 
+        description="Complete tax calculation summary"
+    )
+    
+    # Compliance & Metadata
+    compliance: ComplianceMetadata = Field(
+        default_factory=ComplianceMetadata,
+        description="Compliance rules and metadata"
+    )
+    
+    # Timestamps
+    generated_at: datetime = Field(default_factory=datetime.now)
+    generated_by: str = "GSTR-3B Auto-Population Engine"
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "metadata": {
+                    "gstin": "27AABCT1234C1Z5",
+                    "return_period": "122025",
+                    "taxpayer_name": "Company Name",
+                    "filing_mode": "auto_populated"
+                },
+                "filing_status": {
+                    "gstr1_filed": True,
+                    "gstr2b_generated": True
+                },
+                "section_3_1": {},
+                "section_3_2": {},
+                "section_4": {},
+                "tax_summary": {}
+            }
+        }
+
+
 # Validation Schemas
 class ValidationRuleResponse(BaseModel):
     id: str
