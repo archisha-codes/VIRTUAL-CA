@@ -1245,12 +1245,34 @@ async def verify_gstin_otp(
     # Mark as verified
     otp_requests_db[otp_request_id]["verified"] = True
     
-    logger.info(f"OTP verified for GSTIN {gstin} in workspace {workspace_id}")
+    # Update GSTIN status in database
+    found = False
+    for i, g in enumerate(gstins_db):
+        if g.get("gstin_number") == gstin:
+            gstins_db[i]["status"] = "active"
+            gstins_db[i]["isConnected"] = True
+            gstins_db[i]["last_connected"] = datetime.utcnow().isoformat()
+            found = True
+            break
+            
+    # If not found (e.g. first time), add it
+    if not found:
+        gstins_db.append({
+            "id": generate_id(),
+            "gstin_number": gstin,
+            "workspace_id": workspace_id,
+            "status": "active",
+            "isConnected": True,
+            "last_connected": datetime.utcnow().isoformat()
+        })
+    
+    logger.info(f"OTP verified and GSTIN {gstin} connected in workspace {workspace_id}")
     
     return {
         "success": True,
         "message": "GSTIN connected successfully",
         "gstin": gstin,
+        "is_verified": True,
         "connection_status": "active"
     }
 

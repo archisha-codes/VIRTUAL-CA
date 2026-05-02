@@ -16,6 +16,8 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import GSTR1Workflow from '@/components/gstr1/GSTR1Workflow';
 import GSTR1DrawerFlow from '@/components/gstr1/GSTR1DrawerFlow';
 import GSTR1PreparePage from '@/components/gstr1/GSTR1PreparePage';
+import GSTR1CheckingErrorsPage from '@/components/gstr1/GSTR1CheckingErrorsPage';
+import GSTR1UploadToGSTNPage from '@/components/gstr1/GSTR1UploadToGSTNPage';
 
 // Type for navigation state
 interface GSTR1NavigationState {
@@ -87,9 +89,9 @@ export default function GSTR1Page() {
       <GSTR1DrawerFlow 
         open={true}
         onOpenChange={(open) => {
-          if (!open) {
-            // If drawer is closed without selection, go back to forms
-            navigate('/gst/forms');
+          if (!open && !isDrawerComplete) {
+            // Do not navigate automatically on close due to unmount race conditions
+            // Let the user use browser navigation or explicitly click a button
           }
         }}
         onContinue={handleDrawerContinue}
@@ -99,7 +101,27 @@ export default function GSTR1Page() {
   
   // Show the main GSTR-1 workflow with selected GSTIN and period
   const showValidationWorkflow = navigationState?.step === 'validation';
-  const showPreparePage = navigationState?.step === 'summary' || navigationState?.fromDrawer;
+  const showPreparePage = navigationState?.step === 'summary' || navigationState?.fromDrawer || !navigationState?.step;
+  const showCheckingErrors = navigationState?.step === 'checking-errors';
+  const showUploadToGstn = navigationState?.step === 'upload-to-gstn';
+
+  if (showCheckingErrors) {
+    return (
+      <GSTR1CheckingErrorsPage 
+        gstin={gstin}
+        returnPeriod={period}
+      />
+    );
+  }
+
+  if (showUploadToGstn) {
+    return (
+      <GSTR1UploadToGSTNPage 
+        gstin={gstin}
+        returnPeriod={period}
+      />
+    );
+  }
 
   if (showValidationWorkflow) {
     return (
