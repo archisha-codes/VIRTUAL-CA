@@ -23,7 +23,8 @@ import {
   Trash2,
   Plus,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Loader2
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -44,23 +45,23 @@ import { Calendar as CalendarPicker } from '@/components/ui/calendar';
 import { useAuth } from '@/contexts/AuthContext';
 import { getGstr1State, processGSTR1Excel, saveGstr1State } from '@/lib/api';
 import { parseExcelFile, autoMapColumns, REQUIRED_FIELDS, type ColumnMapping } from '@/lib/excel-parser';
-import { 
-  Select, 
-  SelectContent, 
-  SelectItem, 
-  SelectTrigger, 
-  SelectValue 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
 } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { 
-  DOCUMENT_TYPE_OPTIONS, 
-  CANCELLED_OPTIONS, 
-  TAX_RATE_PERCENTAGE_OPTIONS, 
-  COMPOSITION_UIN_OPTIONS, 
-  SECTION_9_5_OPTIONS, 
-  TYPE_OF_EXPORT_OPTIONS, 
-  STATE_OPTIONS, 
-  SHIPPING_PORT_CODES 
+import {
+  DOCUMENT_TYPE_OPTIONS,
+  CANCELLED_OPTIONS,
+  TAX_RATE_PERCENTAGE_OPTIONS,
+  COMPOSITION_UIN_OPTIONS,
+  SECTION_9_5_OPTIONS,
+  TYPE_OF_EXPORT_OPTIONS,
+  STATE_OPTIONS,
+  SHIPPING_PORT_CODES
 } from './gstr1-form-options';
 import { format } from 'date-fns';
 import type { DateRange } from 'react-day-picker';
@@ -344,7 +345,7 @@ export default function GSTR1SummaryDrawer({
   // Summary data from workflow state
   const [summaryData, setSummaryData] = useState<any>(null);
   const [isLoadingData, setIsLoadingData] = useState(false);
-  
+
   const [expandedSummaries, setExpandedSummaries] = useState<Set<string>>(new Set());
   const [expandedAmendments, setExpandedAmendments] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'summary' | 'documents' | 'edit-summary' | 'document-details'>('summary');
@@ -422,12 +423,12 @@ export default function GSTR1SummaryDrawer({
       return { ...prev, itms: [...currentItems, newItem] };
     });
   };
-  
+
   // Upload Drawer Multi-Step State
   const [uploadStep, setUploadStep] = useState<'select' | 'details' | 'checking' | 'error'>('select');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<'virtualca' | 'gov'>('virtualca');
-  
+
   // Editable Summary Table State
   const [summaryRows, setSummaryRows] = useState<any[]>([]);
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
@@ -516,9 +517,9 @@ export default function GSTR1SummaryDrawer({
         const state = response.data;
         const uploadResult = state.upload_result || (state.gstr1_tables
           ? {
-              success: true,
-              data: state.gstr1_tables,
-            }
+            success: true,
+            data: state.gstr1_tables,
+          }
           : null);
 
         if (uploadResult) {
@@ -902,8 +903,8 @@ export default function GSTR1SummaryDrawer({
       // Sum from items - support multiple field name formats
       // Calculate docCount: sum up docCount if available, otherwise use items.length
       const totalDocs = items.reduce((sum, item) => {
-          const count = normalizeNumericValue(getRowValue(item, ['docCount', 'doc_count', 'count', 'total_documents', 'totalDocuments']));
-          return sum + (count || 1);
+        const count = normalizeNumericValue(getRowValue(item, ['docCount', 'doc_count', 'count', 'total_documents', 'totalDocuments']));
+        return sum + (count || 1);
       }, 0);
 
       const taxable = sumAmounts(items, ['txval', 'taxable_value', 'taxableValue', 'taxableAmount', 'taxable']);
@@ -911,9 +912,9 @@ export default function GSTR1SummaryDrawer({
       const cgst = sumAmounts(items, ['camt', 'cgst_amount', 'cgst']);
       const sgst = sumAmounts(items, ['samt', 'sgst_amount', 'sgst']);
       const cess = sumAmounts(items, ['csamt', 'cess_amount', 'cess']);
-      
+
       const explicitTotal = sumAmounts(items, ['val', 'totalAmount', 'total_amount', 'amount', 'invoiceValue', 'invoice_value', 'noteValue', 'note_value']);
-      
+
       const totalTax = igst + cgst + sgst + cess;
       // Total amount = explicit total if provided, otherwise derived
       const totalAmount = explicitTotal || (taxable + totalTax);
@@ -932,11 +933,11 @@ export default function GSTR1SummaryDrawer({
 
     // Map item IDs to their data arrays
     const dataMap: Record<string, any> = {
-      'b2b': calculateSectionData(asItems(data.b2b)),
+      'b2b': calculateSectionData(asItems(data.b2b?.flatMap((c: any) => c.invoices ? c.invoices : [c]) || data.b2b)),
       'b2cl': calculateSectionData(asItems(data.b2cl)),
       'b2cs': calculateSectionData(asItems(data.b2cs)),
       'exp': calculateSectionData(asItems(data.exp)),
-      'cdnr': calculateSectionData(asItems(data.cdnr)),
+      'cdnr': calculateSectionData(asItems(data.cdnr?.flatMap((c: any) => c.notes ? c.notes : [c]) || data.cdnr)),
       'cdnur': calculateSectionData(asItems(data.cdnur)),
       'sup-reg': calculateSectionData(asItems(data['sup-reg'] || data.sup_reg || data.supReg)),
       'nil': calculateSectionData(asItems(data.nil || data.nil_exemp)),
@@ -1176,7 +1177,7 @@ export default function GSTR1SummaryDrawer({
               No summaries found. Start creating a new summary by adding a new row or import existing summary
             </p>
             <div className="flex items-center gap-3">
-              <Button 
+              <Button
                 className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm font-medium px-5 border-0"
                 onClick={() => {
                   setSummaryRows([{ id: Date.now().toString(), type: 'Inter-State supplies to registered persons', val1: '0.00', val2: '0.00', val3: '0.00' }]);
@@ -1185,7 +1186,7 @@ export default function GSTR1SummaryDrawer({
               >
                 <Plus className="mr-2 h-4 w-4" /> Add new row
               </Button>
-              <Button 
+              <Button
                 variant="outline"
                 className="bg-white hover:bg-slate-50 text-blue-600 shadow-sm font-medium px-5 border border-slate-300"
                 onClick={() => {
@@ -1207,72 +1208,72 @@ export default function GSTR1SummaryDrawer({
 
     return (
       <div className="flex-1 overflow-hidden flex flex-col bg-white">
-          <div className="p-3 border-b flex justify-between items-center bg-white border-slate-200">
-             <div className="flex items-center gap-2">
-                {/* empty left side */}
-             </div>
-             <div className="flex items-center gap-3">
-                 <Button variant="outline" className="h-8 text-xs text-blue-600 border-blue-200">
-                   <FileText className="mr-1.5 h-3 w-3" /> Actions
-                 </Button>
-                 <Button className="bg-blue-600 hover:bg-blue-700 text-white h-8 text-xs px-5">
-                   Save
-                 </Button>
-             </div>
+        <div className="p-3 border-b flex justify-between items-center bg-white border-slate-200">
+          <div className="flex items-center gap-2">
+            {/* empty left side */}
           </div>
-          <div className="flex items-center justify-end px-4 py-2 bg-white">
-            <div className="flex items-center gap-2">
-               <span className="text-xs text-slate-600 font-medium">Switch back to old table</span>
-               <div className="w-8 h-4 bg-blue-600 rounded-full flex items-center justify-end px-0.5 cursor-pointer">
-                 <div className="w-3 h-3 bg-white rounded-full"></div>
-               </div>
+          <div className="flex items-center gap-3">
+            <Button variant="outline" className="h-8 text-xs text-blue-600 border-blue-200">
+              <FileText className="mr-1.5 h-3 w-3" /> Actions
+            </Button>
+            <Button className="bg-blue-600 hover:bg-blue-700 text-white h-8 text-xs px-5">
+              Save
+            </Button>
+          </div>
+        </div>
+        <div className="flex items-center justify-end px-4 py-2 bg-white">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-600 font-medium">Switch back to old table</span>
+            <div className="w-8 h-4 bg-blue-600 rounded-full flex items-center justify-end px-0.5 cursor-pointer">
+              <div className="w-3 h-3 bg-white rounded-full"></div>
             </div>
           </div>
-          <div className="flex-1 overflow-auto bg-white border-t border-slate-200">
-             <table className="w-full text-left border-collapse border-b border-slate-200">
-               <thead>
-                 <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] font-semibold">
-                   <th className="py-3 px-4 w-16 text-center border-r border-slate-200 font-medium">Errors</th>
-                   <th className="py-3 px-4 border-r border-slate-200 font-medium whitespace-nowrap">Description</th>
-                   <th className="py-3 px-4 border-r border-slate-200 font-medium whitespace-nowrap">Nil Rated Supplies</th>
-                   <th className="py-3 px-4 border-r border-slate-200 font-medium whitespace-nowrap">Exempted(other than nil rated/non-GST)</th>
-                   <th className="py-3 px-4 border-r border-slate-200 font-medium whitespace-nowrap">Non-GST Supplies</th>
-                   <th className="py-3 px-4 font-medium whitespace-nowrap">Return Type</th>
-                 </tr>
-               </thead>
-               <tbody>
-                  {summaryRows.map((row) => (
-                    <tr key={row.id} className="border-b border-slate-200 hover:bg-slate-50 group transition-colors">
-                       <td className="py-2.5 px-4 text-center border-r border-slate-200">
-                          <div className="flex items-center justify-center">
-                            <div className="h-5 w-5 rounded-full border border-emerald-500 flex items-center justify-center">
-                              <svg className="w-3 h-3 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                            </div>
-                          </div>
-                       </td>
-                       <td className="py-2.5 px-0 border-r border-slate-200 relative">
-                         <input type="text" className="w-full h-full absolute inset-0 bg-transparent outline-none focus:ring-1 focus:ring-blue-400 px-4 text-xs font-medium text-slate-700" placeholder="" />
-                       </td>
-                       <td className="py-2.5 px-0 border-r border-slate-200 relative group-hover:bg-slate-50">
-                         <input type="text" value={row.val1} onChange={e => updateRow(row.id, 'val1', e.target.value)} className="w-full h-full absolute inset-0 text-left bg-transparent outline-none focus:ring-1 focus:ring-blue-400 px-4 text-xs font-medium" />
-                       </td>
-                       <td className="py-2.5 px-0 border-r border-slate-200 relative group-hover:bg-slate-50">
-                         <input type="text" value={row.val2} onChange={e => updateRow(row.id, 'val2', e.target.value)} className="w-full h-full absolute inset-0 text-left bg-transparent outline-none focus:ring-1 focus:ring-blue-400 px-4 text-xs font-medium" />
-                       </td>
-                       <td className="py-2.5 px-0 border-r border-slate-200 relative group-hover:bg-slate-50">
-                         <input type="text" value={row.val3} onChange={e => updateRow(row.id, 'val3', e.target.value)} className="w-full h-full absolute inset-0 text-left bg-transparent outline-none focus:ring-1 focus:ring-blue-400 px-4 text-xs font-medium" />
-                       </td>
-                       <td className="py-2.5 px-0 relative group-hover:bg-slate-50">
-                         <input type="text" className="w-full h-full absolute inset-0 text-left bg-transparent outline-none focus:ring-1 focus:ring-blue-400 px-4 text-xs font-medium" placeholder="" />
-                       </td>
-                    </tr>
-                  ))}
-               </tbody>
-             </table>
-          </div>
-          <div className="p-3 border-t border-slate-200 flex justify-between items-center bg-white shadow-sm mt-auto">
-             <Button variant="outline" className="h-8 text-xs text-slate-600" onClick={() => scrollToSection('next')}>Next <ChevronRight className="ml-1 h-3 w-3" /></Button>
-          </div>
+        </div>
+        <div className="flex-1 overflow-auto bg-white border-t border-slate-200">
+          <table className="w-full text-left border-collapse border-b border-slate-200">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] font-semibold">
+                <th className="py-3 px-4 w-16 text-center border-r border-slate-200 font-medium">Errors</th>
+                <th className="py-3 px-4 border-r border-slate-200 font-medium whitespace-nowrap">Description</th>
+                <th className="py-3 px-4 border-r border-slate-200 font-medium whitespace-nowrap">Nil Rated Supplies</th>
+                <th className="py-3 px-4 border-r border-slate-200 font-medium whitespace-nowrap">Exempted(other than nil rated/non-GST)</th>
+                <th className="py-3 px-4 border-r border-slate-200 font-medium whitespace-nowrap">Non-GST Supplies</th>
+                <th className="py-3 px-4 font-medium whitespace-nowrap">Return Type</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summaryRows.map((row) => (
+                <tr key={row.id} className="border-b border-slate-200 hover:bg-slate-50 group transition-colors">
+                  <td className="py-2.5 px-4 text-center border-r border-slate-200">
+                    <div className="flex items-center justify-center">
+                      <div className="h-5 w-5 rounded-full border border-emerald-500 flex items-center justify-center">
+                        <svg className="w-3 h-3 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-2.5 px-0 border-r border-slate-200 relative">
+                    <input type="text" className="w-full h-full absolute inset-0 bg-transparent outline-none focus:ring-1 focus:ring-blue-400 px-4 text-xs font-medium text-slate-700" placeholder="" />
+                  </td>
+                  <td className="py-2.5 px-0 border-r border-slate-200 relative group-hover:bg-slate-50">
+                    <input type="text" value={row.val1} onChange={e => updateRow(row.id, 'val1', e.target.value)} className="w-full h-full absolute inset-0 text-left bg-transparent outline-none focus:ring-1 focus:ring-blue-400 px-4 text-xs font-medium" />
+                  </td>
+                  <td className="py-2.5 px-0 border-r border-slate-200 relative group-hover:bg-slate-50">
+                    <input type="text" value={row.val2} onChange={e => updateRow(row.id, 'val2', e.target.value)} className="w-full h-full absolute inset-0 text-left bg-transparent outline-none focus:ring-1 focus:ring-blue-400 px-4 text-xs font-medium" />
+                  </td>
+                  <td className="py-2.5 px-0 border-r border-slate-200 relative group-hover:bg-slate-50">
+                    <input type="text" value={row.val3} onChange={e => updateRow(row.id, 'val3', e.target.value)} className="w-full h-full absolute inset-0 text-left bg-transparent outline-none focus:ring-1 focus:ring-blue-400 px-4 text-xs font-medium" />
+                  </td>
+                  <td className="py-2.5 px-0 relative group-hover:bg-slate-50">
+                    <input type="text" className="w-full h-full absolute inset-0 text-left bg-transparent outline-none focus:ring-1 focus:ring-blue-400 px-4 text-xs font-medium" placeholder="" />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="p-3 border-t border-slate-200 flex justify-between items-center bg-white shadow-sm mt-auto">
+          <Button variant="outline" className="h-8 text-xs text-slate-600" onClick={() => scrollToSection('next')}>Next <ChevronRight className="ml-1 h-3 w-3" /></Button>
+        </div>
       </div>
     );
   };
@@ -1280,7 +1281,7 @@ export default function GSTR1SummaryDrawer({
   const renderDocumentDetailsView = () => {
     const doc = isEditMode ? (editedDoc || selectedDocument || {}) : (selectedDocument || {});
     const items = doc.itms || doc.items || doc.line_items || doc.invoice_items || [];
-    
+
     const sidebarItems = [
       { id: 'doc-details', label: 'Document Details' },
       { id: 'line-items', label: 'Line details' },
@@ -1296,24 +1297,24 @@ export default function GSTR1SummaryDrawer({
       const element = document.getElementById(id);
       const container = document.getElementById('scroll-container');
       if (element && container) {
-        container.scrollTo({ 
-          top: element.offsetTop - 10, 
-          behavior: 'smooth' 
+        container.scrollTo({
+          top: element.offsetTop - 10,
+          behavior: 'smooth'
         });
       }
     };
 
     // Note: Scroll tracking useEffect has been moved to component level to follow React Rules of Hooks.
 
-    const renderField = (label: string, fieldKey: string, options: { 
-      type?: 'text' | 'select' | 'date', 
-      options?: string[], 
+    const renderField = (label: string, fieldKey: string, options: {
+      type?: 'text' | 'select' | 'date',
+      options?: string[],
       className?: string,
       readOnly?: boolean,
       placeholder?: string
     } = {}) => {
       const val = doc[fieldKey] || (isEditMode ? '' : '-');
-      
+
       if (!isEditMode || options.readOnly) {
         return (
           <div className="flex flex-col gap-1.5 flex-1 min-w-[150px]">
@@ -1350,9 +1351,9 @@ export default function GSTR1SummaryDrawer({
           <div className="flex flex-col gap-1.5 flex-1 min-w-[150px]">
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">{label}</label>
             <div className="relative">
-              <Input 
-                type="text" 
-                value={val === '-' ? '' : val} 
+              <Input
+                type="text"
+                value={val === '-' ? '' : val}
                 onChange={(e) => handleFieldChange(fieldKey, e.target.value)}
                 placeholder="DD-MM-YYYY"
                 className="h-10 bg-white border-slate-200 text-sm pr-10 focus-visible:ring-1 focus-visible:ring-blue-500"
@@ -1366,8 +1367,8 @@ export default function GSTR1SummaryDrawer({
       return (
         <div className="flex flex-col gap-1.5 flex-1 min-w-[150px]">
           <label className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">{label}</label>
-          <Input 
-            value={val === '-' ? '' : val} 
+          <Input
+            value={val === '-' ? '' : val}
             onChange={(e) => handleFieldChange(fieldKey, e.target.value)}
             className="h-10 bg-white border-slate-200 text-sm focus-visible:ring-1 focus-visible:ring-blue-500 placeholder:text-slate-300"
             placeholder={options.placeholder || "Enter a value"}
@@ -1391,11 +1392,10 @@ export default function GSTR1SummaryDrawer({
               <button
                 key={item.id}
                 onClick={() => scrollToSection(item.id)}
-                className={`relative px-4 py-3 text-left text-[13px] font-semibold cursor-pointer transition-all duration-300 rounded-lg group ${
-                  activeDetailsSection === item.id 
-                    ? 'text-blue-700 bg-blue-50/80 font-bold' 
-                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent hover:border-slate-100'
-                }`}
+                className={`relative px-4 py-3 text-left text-[13px] font-semibold cursor-pointer transition-all duration-300 rounded-lg group ${activeDetailsSection === item.id
+                  ? 'text-blue-700 bg-blue-50/80 font-bold'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent hover:border-slate-100'
+                  }`}
               >
                 {activeDetailsSection === item.id && (
                   <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-2/3 bg-blue-600 rounded-r-md transition-all"></div>
@@ -1414,19 +1414,19 @@ export default function GSTR1SummaryDrawer({
         {/* Content Area */}
         <div className="flex-1 flex flex-col min-w-0 bg-white relative font-sans">
           <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shrink-0 sticky top-0 z-30 shadow-sm">
-             <div className="flex items-center gap-2">
-                <span className="text-[15px] font-bold text-slate-700">Document Number : <span className="text-slate-900 font-extrabold">{doc.inum || doc.nt_num || '-'}</span></span>
-                <div className="flex items-center gap-2 ml-4">
-                   <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-600 border-emerald-100 font-bold px-2 py-0.5">IRN Status : GENERATED</Badge>
-                   <Badge variant="outline" className="text-[10px] bg-slate-50 text-slate-400 border-slate-200 font-bold px-2 py-0.5">EWB Status : NOT GENERATED</Badge>
-                </div>
-             </div>
-             <div className="flex items-center gap-4">
-                <Button variant="default" size="sm" className="bg-blue-600 hover:bg-blue-700 text-white font-bold h-9 px-6 rounded shadow-sm transition-all hover:shadow-md" onClick={handleSaveEditedDoc}>
-                   Save
-                </Button>
-                <Button variant="ghost" size="icon" onClick={() => setViewMode('documents')} className="h-8 w-8 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><X className="h-5 w-5" /></Button>
-             </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[15px] font-bold text-slate-700">Document Number : <span className="text-slate-900 font-extrabold">{doc.inum || doc.nt_num || '-'}</span></span>
+              <div className="flex items-center gap-2 ml-4">
+                <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-600 border-emerald-100 font-bold px-2 py-0.5">IRN Status : GENERATED</Badge>
+                <Badge variant="outline" className="text-[10px] bg-slate-50 text-slate-400 border-slate-200 font-bold px-2 py-0.5">EWB Status : NOT GENERATED</Badge>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <Button variant="default" size="sm" className="bg-blue-600 hover:bg-blue-700 text-white font-bold h-9 px-6 rounded shadow-sm transition-all hover:shadow-md" onClick={handleSaveEditedDoc}>
+                Save
+              </Button>
+              <Button variant="ghost" size="icon" onClick={() => setViewMode('documents')} className="h-8 w-8 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><X className="h-5 w-5" /></Button>
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto scroll-mt-20 scroll-pt-10 scroll-smooth relative custom-scrollbar bg-white" id="scroll-container">
@@ -1441,12 +1441,12 @@ export default function GSTR1SummaryDrawer({
                   {renderField('Document Number', 'inum', { readOnly: true })}
                   {renderField('Document Date', 'idt', { type: 'date' })}
                   {renderField('State Place of Supply', 'pos', { type: 'select', options: STATE_OPTIONS })}
-                  
+
                   {renderField('Return Filing Month', 'period', { type: 'text', readOnly: true })}
                   {renderField('Total Document Value', 'val', { type: 'text' })}
                   {renderField('Is this a Bill of Supply', 'is_bill_supply', { type: 'select', options: ['Select an option', 'Y', 'N'] })}
                   {renderField('Is Reverse Charge Applicable?', 'rchrg', { type: 'select', options: ['N', 'Y'] })}
-                  
+
                   {renderField('Is this document cancelled?', 'is_cancelled', { type: 'select', options: CANCELLED_OPTIONS })}
                   {renderField('Applicable % of Tax Rate', 'diff_rt', { type: 'select', options: TAX_RATE_PERCENTAGE_OPTIONS })}
                   {renderField('Linked Invoice Number (filled in case of CDN)', 'link_inum')}
@@ -1664,11 +1664,11 @@ export default function GSTR1SummaryDrawer({
                     </div>
                   )}
                   <div className="flex items-center justify-between pt-6">
-                      <div className="flex items-center gap-2">
-                         <Button variant="outline" size="sm" className="h-9 px-3 text-xs text-slate-500 border-slate-200 gap-2"><ChevronLeft className="h-4 w-4" /> Previous</Button>
-                         <div className="h-9 w-9 bg-blue-600 text-white rounded-md flex items-center justify-center text-[13px] font-extrabold shadow-md transform hover:scale-105 transition-transform cursor-pointer">1</div>
-                         <Button variant="outline" size="sm" className="h-9 px-3 text-xs text-slate-400 border-slate-100 bg-slate-50 gap-2 cursor-not-allowed">Next <ChevronRight className="h-4 w-4" /></Button>
-                      </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" className="h-9 px-3 text-xs text-slate-500 border-slate-200 gap-2"><ChevronLeft className="h-4 w-4" /> Previous</Button>
+                      <div className="h-9 w-9 bg-blue-600 text-white rounded-md flex items-center justify-center text-[13px] font-extrabold shadow-md transform hover:scale-105 transition-transform cursor-pointer">1</div>
+                      <Button variant="outline" size="sm" className="h-9 px-3 text-xs text-slate-400 border-slate-100 bg-slate-50 gap-2 cursor-not-allowed">Next <ChevronRight className="h-4 w-4" /></Button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1736,7 +1736,7 @@ export default function GSTR1SummaryDrawer({
                   {renderField('GSTIN of Ecommerce Marketplace', 'gstin_eco')}
                   {renderField('Section 9(5)', 'sec_9_5', { type: 'select', options: SECTION_9_5_OPTIONS })}
                   {renderField('E-Com Supplier GSTIN', 'eco_ctin')}
-                  
+
                   {renderField('ERP Company Code', 'erp_comp_code')}
                   {renderField('ERP Plant Code', 'erp_plant_code')}
                   {renderField('Customer Code', 'cust_code')}
@@ -1746,7 +1746,7 @@ export default function GSTR1SummaryDrawer({
               </div>
             </div>
           </div>
-          
+
           <div className="bg-white border-t border-slate-100 p-5 flex justify-end items-center gap-4 shrink-0 z-40 font-sans shadow-[0_-5px_15px_-5px_rgba(0,0,0,0.05)]">
             {isEditMode ? (
               <>
@@ -1776,13 +1776,13 @@ export default function GSTR1SummaryDrawer({
 
     const data = (summaryData as any).data || summaryData;
     let sectionData: any[] = [];
-    
+
     // Map section IDs to data
-    if (currentSectionId === 'b2b') sectionData = data.b2b?.flatMap((c: any) => c.invoices?.map((i: any) => ({ ...i, ctin: c.ctin, customer_name: c.customer_name }))) || [];
+    if (currentSectionId === 'b2b') sectionData = data.b2b?.flatMap((c: any) => c.invoices ? c.invoices.map((i: any) => ({ ...i, ctin: c.ctin, customer_name: c.customer_name })) : []) || [];
     else if (currentSectionId === 'b2cl') sectionData = data.b2cl || [];
     else if (currentSectionId === 'b2cs') sectionData = data.b2cs || [];
     else if (currentSectionId === 'exp') sectionData = data.exp || [];
-    else if (currentSectionId === 'cdnr') sectionData = data.cdnr?.flatMap((c: any) => c.notes?.map((n: any) => ({ ...n, ctin: c.ctin, customer_name: c.customer_name }))) || [];
+    else if (currentSectionId === 'cdnr') sectionData = data.cdnr?.flatMap((c: any) => c.notes ? c.notes.map((n: any) => ({ ...n, ctin: c.ctin, customer_name: c.customer_name })) : []) || [];
     else if (currentSectionId === 'cdnur') sectionData = data.cdnur || [];
 
     // Summary calculations for the header
@@ -1819,76 +1819,76 @@ export default function GSTR1SummaryDrawer({
 
         {/* Filters and Actions Bar like Image 3 */}
         <div className="px-6 py-3 bg-slate-50/50 border-b border-slate-200 flex items-center justify-between shrink-0">
-           <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 text-blue-600 border-blue-200 bg-white shadow-none">
-                <Filter className="h-3.5 w-3.5" /> Filters {isFilterApplied ? "(3 applied)" : ""}
-              </Button>
-              {isFilterApplied && (
-                <div className="flex gap-1">
-                   <Badge variant="outline" className="h-7 bg-white text-slate-500 border-slate-200 font-medium px-2 py-0 shadow-none">Section Name : 1 filter <X className="ml-1 h-3 w-3 cursor-pointer" /></Badge>
-                   <Badge variant="outline" className="h-7 bg-white text-slate-500 border-slate-200 font-medium px-2 py-0 shadow-none">Sta... <X className="ml-1 h-3 w-3 cursor-pointer" /></Badge>
-                </div>
-              )}
-           </div>
-           <div className="flex items-center gap-3">
-              <span className="text-xs text-slate-500 font-medium whitespace-nowrap">1 - {sectionData.length} of {sectionData.length}</span>
-              <div className="flex items-center gap-1 mr-2">
-                 <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-slate-400"><ChevronLeft className="h-4 w-4" /></Button>
-                 <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-slate-400"><ChevronRight className="h-4 w-4" /></Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 text-blue-600 border-blue-200 bg-white shadow-none">
+              <Filter className="h-3.5 w-3.5" /> Filters {isFilterApplied ? "(3 applied)" : ""}
+            </Button>
+            {isFilterApplied && (
+              <div className="flex gap-1">
+                <Badge variant="outline" className="h-7 bg-white text-slate-500 border-slate-200 font-medium px-2 py-0 shadow-none">Section Name : 1 filter <X className="ml-1 h-3 w-3 cursor-pointer" /></Badge>
+                <Badge variant="outline" className="h-7 bg-white text-slate-500 border-slate-200 font-medium px-2 py-0 shadow-none">Sta... <X className="ml-1 h-3 w-3 cursor-pointer" /></Badge>
               </div>
-              <Button variant="outline" size="sm" className="h-8 text-xs text-blue-600 border-blue-200 bg-blue-50/10 font-bold border-dashed shadow-none">
-                <Download className="mr-1.5 h-3.5 w-3.5" /> Download (doc level report)
-              </Button>
-              <Button variant="outline" size="sm" className="h-8 text-xs text-blue-600 border-blue-200 bg-white font-bold shadow-none">
-                  Actions <ChevronDown className="ml-1.5 h-3.5 w-3.5" />
-              </Button>
-           </div>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-500 font-medium whitespace-nowrap">1 - {sectionData.length} of {sectionData.length}</span>
+            <div className="flex items-center gap-1 mr-2">
+              <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-slate-400"><ChevronLeft className="h-4 w-4" /></Button>
+              <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-slate-400"><ChevronRight className="h-4 w-4" /></Button>
+            </div>
+            <Button variant="outline" size="sm" className="h-8 text-xs text-blue-600 border-blue-200 bg-blue-50/10 font-bold border-dashed shadow-none">
+              <Download className="mr-1.5 h-3.5 w-3.5" /> Download (doc level report)
+            </Button>
+            <Button variant="outline" size="sm" className="h-8 text-xs text-blue-600 border-blue-200 bg-white font-bold shadow-none">
+              Actions <ChevronDown className="ml-1.5 h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
 
         {/* Documents Table like Image 3 */}
         <div className="flex-1 overflow-auto bg-white">
-           <table className="w-full text-left border-collapse min-w-[1200px]">
-             <thead>
-               <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] font-bold uppercase tracking-wider sticky top-0 bg-slate-50 z-10">
-                 <th className="py-3 px-4 w-12 text-center border-r border-slate-200"><Checkbox className="border-slate-300" /></th>
-                 <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Document Number</th>
-                 <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Document Type Code</th>
-                 <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Section Name</th>
-                 <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">SubSection Name</th>
-                 <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Type of Export</th>
-                 <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Document Date</th>
-                 <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Recipient Billing GSTIN</th>
-                 <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Recipient Billing Name</th>
-                 <th className="py-3 px-4 whitespace-nowrap">Place of Supply</th>
-               </tr>
-             </thead>
-             <tbody>
-               {sectionData.length > 0 ? sectionData.map((row, idx) => {
-                 const inum = getRowValue(row, ['inum', 'nt_num', 'invoice_number', 'document_number']);
-                 const idt = getRowValue(row, ['idt', 'nt_dt', 'invoice_date', 'document_date']);
-                 const ctin = getRowValue(row, ['ctin', 'customer_gstin', 'gstin']);
-                 const custName = getRowValue(row, ['customer_name', 'name']);
-                 const pos = getRowValue(row, ['pos', 'place_of_supply']);
-                 
-                 return (
-                   <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50/80 transition-colors text-xs text-slate-600">
-                     <td className="py-3 px-4 text-center border-r border-slate-100/50"><Checkbox className="border-slate-300" /></td>
-                     <td className="py-3 px-4 font-bold text-blue-600 cursor-pointer hover:underline border-r border-slate-100/50" onClick={() => { setSelectedDocument(row); setViewMode('document-details'); }}>{inum || '-'}</td>
-                     <td className="py-3 px-4 border-r border-slate-100/50">{getRowValue(row, ['inv_typ', 'nt_typ', 'document_type']) || (ctin ? 'INVOICE' : 'B2CS')}</td>
-                     <td className="py-3 px-4 uppercase font-bold border-r border-slate-100/50">{currentSectionId.toUpperCase()}</td>
-                     <td className="py-3 px-4 uppercase text-slate-400 font-medium border-r border-slate-100/50">REGULAR</td>
-                     <td className="py-3 px-4 border-r border-slate-100/50">-</td>
-                     <td className="py-3 px-4 border-r border-slate-100/50">{idt || '-'}</td>
-                     <td className="py-3 px-4 font-mono border-r border-slate-100/50">{ctin || '-'}</td>
-                     <td className="py-3 px-4 truncate max-w-[150px] border-r border-slate-100/50">{custName || '-'}</td>
-                     <td className="py-3 px-4">{pos || '-'}</td>
-                   </tr>
-                 );
-               }) : (
-                 <tr><td colSpan={10} className="py-12 text-center text-slate-400 italic">No data found in this section</td></tr>
-               )}
-             </tbody>
-           </table>
+          <table className="w-full text-left border-collapse min-w-[1200px]">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] font-bold uppercase tracking-wider sticky top-0 bg-slate-50 z-10">
+                <th className="py-3 px-4 w-12 text-center border-r border-slate-200"><Checkbox className="border-slate-300" /></th>
+                <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Document Number</th>
+                <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Document Type Code</th>
+                <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Section Name</th>
+                <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">SubSection Name</th>
+                <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Type of Export</th>
+                <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Document Date</th>
+                <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Recipient Billing GSTIN</th>
+                <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">Recipient Billing Name</th>
+                <th className="py-3 px-4 whitespace-nowrap">Place of Supply</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sectionData.length > 0 ? sectionData.map((row, idx) => {
+                const inum = getRowValue(row, ['inum', 'nt_num', 'invoice_number', 'document_number']);
+                const idt = getRowValue(row, ['idt', 'nt_dt', 'invoice_date', 'document_date']);
+                const ctin = getRowValue(row, ['ctin', 'customer_gstin', 'gstin']);
+                const custName = getRowValue(row, ['customer_name', 'name']);
+                const pos = getRowValue(row, ['pos', 'place_of_supply']);
+
+                return (
+                  <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50/80 transition-colors text-xs text-slate-600">
+                    <td className="py-3 px-4 text-center border-r border-slate-100/50"><Checkbox className="border-slate-300" /></td>
+                    <td className="py-3 px-4 font-bold text-blue-600 cursor-pointer hover:underline border-r border-slate-100/50" onClick={() => { setSelectedDocument(row); setViewMode('document-details'); }}>{inum || '-'}</td>
+                    <td className="py-3 px-4 border-r border-slate-100/50">{getRowValue(row, ['inv_typ', 'nt_typ', 'document_type']) || (ctin ? 'INVOICE' : 'B2CS')}</td>
+                    <td className="py-3 px-4 uppercase font-bold border-r border-slate-100/50">{currentSectionId.toUpperCase()}</td>
+                    <td className="py-3 px-4 uppercase text-slate-400 font-medium border-r border-slate-100/50">REGULAR</td>
+                    <td className="py-3 px-4 border-r border-slate-100/50">-</td>
+                    <td className="py-3 px-4 border-r border-slate-100/50">{idt || '-'}</td>
+                    <td className="py-3 px-4 font-mono border-r border-slate-100/50">{ctin || '-'}</td>
+                    <td className="py-3 px-4 truncate max-w-[150px] border-r border-slate-100/50">{custName || '-'}</td>
+                    <td className="py-3 px-4">{pos || '-'}</td>
+                  </tr>
+                );
+              }) : (
+                <tr><td colSpan={10} className="py-12 text-center text-slate-400 italic">No data found in this section</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     );
@@ -1980,10 +1980,10 @@ export default function GSTR1SummaryDrawer({
             </DrawerClose>
           </div>
 
-          {viewMode === 'summary' ? renderMainSummary() : 
-           viewMode === 'edit-summary' ? renderEditSummaryView() : 
-           viewMode === 'document-details' ? renderDocumentDetailsView() : 
-           renderDocumentsView()}
+          {viewMode === 'summary' ? renderMainSummary() :
+            viewMode === 'edit-summary' ? renderEditSummaryView() :
+              viewMode === 'document-details' ? renderDocumentDetailsView() :
+                renderDocumentsView()}
 
           {uploadDrawerOpen && (
             <div className="absolute top-0 right-0 w-[420px] h-full bg-white shadow-[-4px_0_24px_rgba(0,0,0,0.1)] border-l border-slate-200 z-50 flex flex-col animate-in slide-in-from-right duration-200 font-sans">
@@ -1993,10 +1993,10 @@ export default function GSTR1SummaryDrawer({
                     <ChevronLeft className="h-5 w-5 text-slate-500 cursor-pointer hover:text-slate-800" onClick={() => setUploadStep('select')} />
                   )}
                   <h2 className="text-[17px] font-semibold text-slate-800">
-                    {uploadStep === 'select' ? 'Upload Sales register' : 
-                     uploadStep === 'details' ? 'File details' : 
-                     uploadStep === 'checking' ? 'Checking file for errors & duplicates' : 
-                     'File Summary'}
+                    {uploadStep === 'select' ? 'Upload Sales register' :
+                      uploadStep === 'details' ? 'File details' :
+                        uploadStep === 'checking' ? 'Checking file for errors & duplicates' :
+                          'File Summary'}
                   </h2>
                 </div>
                 <X className="h-5 w-5 text-slate-500 cursor-pointer hover:text-red-500" onClick={() => { setUploadDrawerOpen(false); setUploadStep('select'); setSelectedFile(null); setIsUploading(false); }} />
@@ -2005,14 +2005,14 @@ export default function GSTR1SummaryDrawer({
               <div className="flex-1 overflow-y-auto bg-white flex flex-col">
                 {uploadStep === 'select' && (
                   <div className="p-6">
-                    <input 
-                      type="file" 
+                    <input
+                      type="file"
                       ref={fileInputRef}
-                      className="hidden" 
+                      className="hidden"
                       onChange={handleFileUpload}
                       accept=".xls,.xlsx,.csv"
                     />
-                    <div 
+                    <div
                       className="border border-dashed border-blue-300 bg-blue-50/50 rounded-xl p-10 flex flex-col items-center justify-center mb-10 cursor-pointer hover:bg-blue-50 transition-colors relative"
                       onClick={() => fileInputRef.current?.click()}
                     >
@@ -2022,15 +2022,15 @@ export default function GSTR1SummaryDrawer({
                       <p className="text-blue-600 font-semibold text-base mb-1.5">Select a file to import</p>
                       <p className="text-slate-400 text-[13px]">or drag and drop your file in this box</p>
                     </div>
-                    
+
                     <h3 className="text-[13px] font-semibold text-slate-500 mb-3 uppercase tracking-wider">Don't have a file to import?</h3>
                     <div className="space-y-3">
-                      <div 
+                      <div
                         onClick={() => {
-                            const link = document.createElement('a');
-                            link.href = '/virtual_CA_template.xlsx';
-                            link.download = 'virtual_CA_template.xlsx';
-                            link.click();
+                          const link = document.createElement('a');
+                          link.href = '/virtual_CA_template.xlsx';
+                          link.download = 'virtual_CA_template.xlsx';
+                          link.click();
                         }}
                         className="border border-slate-200 rounded-lg p-3.5 flex items-center justify-between hover:border-emerald-400 cursor-pointer transition-colors group bg-white shadow-sm"
                       >
@@ -2041,12 +2041,12 @@ export default function GSTR1SummaryDrawer({
                           <span className="text-sm font-semibold text-slate-700">Virtual CA Template</span>
                         </div>
                       </div>
-                      <div 
+                      <div
                         onClick={() => {
-                            const link = document.createElement('a');
-                            link.href = '/amendment.pdf';
+                          const link = document.createElement('a');
+                          link.href = '/amendment.pdf';
                           link.download = 'gstr1_template.pdf';
-                            link.click();
+                          link.click();
                         }}
                         className="border border-slate-200 rounded-lg p-3.5 flex items-center justify-between hover:border-emerald-400 cursor-pointer transition-colors group bg-white shadow-sm"
                       >
@@ -2148,43 +2148,43 @@ export default function GSTR1SummaryDrawer({
                 {uploadStep === 'checking' && (
                   <div className="p-8 flex flex-col items-center flex-1">
                     <div className="flex flex-col items-center justify-center py-12">
-                       <div className="w-24 h-24 relative mb-6">
-                         <div className="absolute inset-0 border-[6px] border-slate-100 rounded-full"></div>
-                         <div className="absolute inset-0 border-[6px] border-blue-500 rounded-full border-t-transparent animate-spin"></div>
-                         <div className="absolute inset-0 flex items-center justify-center">
-                           <FileText className="h-8 w-8 text-blue-500" />
-                         </div>
-                       </div>
-                       <p className="text-[17px] font-semibold text-slate-800">Please wait. This may take a few minutes.</p>
+                      <div className="w-24 h-24 relative mb-6">
+                        <div className="absolute inset-0 border-[6px] border-slate-100 rounded-full"></div>
+                        <div className="absolute inset-0 border-[6px] border-blue-500 rounded-full border-t-transparent animate-spin"></div>
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <FileText className="h-8 w-8 text-blue-500" />
+                        </div>
+                      </div>
+                      <p className="text-[17px] font-semibold text-slate-800">Please wait. This may take a few minutes.</p>
                     </div>
 
                     <div className="w-full border border-slate-200 rounded-lg overflow-hidden mt-2">
-                       <div className="bg-slate-50 px-4 py-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200">
-                         FILE DETAILS
-                       </div>
-                       <div className="p-4 space-y-3">
-                         <div className="flex items-center justify-between">
-                           <div className="flex items-center gap-2 text-sm text-slate-700"><FileText className="h-4 w-4 text-slate-400" /> <span className="font-medium">{selectedFile?.name || 'No file selected'}</span></div>
-                           <span className="text-xs text-slate-500">{selectedFile?.size ? `${(selectedFile.size / 1024).toFixed(1)} KB` : 'Unknown size'}</span>
-                         </div>
-                         <div className="flex items-center gap-2 text-sm text-slate-700">
-                           <Inbox className="h-4 w-4 text-slate-400" /> 
-                           <span className="truncate">{businessName || 'Selected business'}: GSTIN - {gstin}</span>
-                         </div>
-                         <div className="flex items-center gap-2 text-sm text-slate-700">
-                           <Calendar className="h-4 w-4 text-slate-400" /> 
-                           {dateRange?.from ? `${format(dateRange.from, 'LLL yyyy')} - ${format(dateRange.to || dateRange.from, 'LLL yyyy')}` : returnPeriod || 'Select return period'}
-                         </div>
-                         <div className="flex items-center gap-2 text-sm text-slate-700"><Download className="h-4 w-4 text-slate-400" /> {selectedTemplateLabel}</div>
-                       </div>
+                      <div className="bg-slate-50 px-4 py-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200">
+                        FILE DETAILS
+                      </div>
+                      <div className="p-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-sm text-slate-700"><FileText className="h-4 w-4 text-slate-400" /> <span className="font-medium">{selectedFile?.name || 'No file selected'}</span></div>
+                          <span className="text-xs text-slate-500">{selectedFile?.size ? `${(selectedFile.size / 1024).toFixed(1)} KB` : 'Unknown size'}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-sm text-slate-700">
+                          <Inbox className="h-4 w-4 text-slate-400" />
+                          <span className="truncate">{businessName || 'Selected business'}: GSTIN - {gstin}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-sm text-slate-700">
+                          <Calendar className="h-4 w-4 text-slate-400" />
+                          {dateRange?.from ? `${format(dateRange.from, 'LLL yyyy')} - ${format(dateRange.to || dateRange.from, 'LLL yyyy')}` : returnPeriod || 'Select return period'}
+                        </div>
+                        <div className="flex items-center gap-2 text-sm text-slate-700"><Download className="h-4 w-4 text-slate-400" /> {selectedTemplateLabel}</div>
+                      </div>
                     </div>
 
                     <div className="w-full border border-emerald-200 rounded-lg p-4 mt-4 bg-white flex items-start gap-3">
-                       <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0 mt-0.5" />
-                       <div>
-                         <p className="text-sm font-bold text-emerald-700 mb-1">Your file is being processed...</p>
-                         <p className="text-xs text-emerald-600 leading-relaxed">Hurray! Your file has been uploaded successfully and is currently being processed. We will let you know when the ingestion is complete.</p>
-                       </div>
+                      <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-bold text-emerald-700 mb-1">Your file is being processed...</p>
+                        <p className="text-xs text-emerald-600 leading-relaxed">Hurray! Your file has been uploaded successfully and is currently being processed. We will let you know when the ingestion is complete.</p>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -2192,13 +2192,13 @@ export default function GSTR1SummaryDrawer({
                 {uploadStep === 'error' && (
                   <div className="p-8 flex flex-col items-center justify-center flex-1">
                     <div className="w-28 h-28 mb-4">
-                       <div className="bg-amber-100 text-amber-600 rounded-full w-20 h-20 mx-auto flex items-center justify-center mb-2">
-                         <AlertCircle className="h-10 w-10 text-amber-500" />
-                       </div>
+                      <div className="bg-amber-100 text-amber-600 rounded-full w-20 h-20 mx-auto flex items-center justify-center mb-2">
+                        <AlertCircle className="h-10 w-10 text-amber-500" />
+                      </div>
                     </div>
                     <h3 className="text-xl font-bold text-slate-800 text-center mb-2">Some mandatory Headers are missing.</h3>
                     <p className="text-base text-slate-600 text-center mb-6">Column mandatory header(s) are missing</p>
-                    
+
                     <div className="text-sm text-slate-700 mb-8 w-full">
                       <p className="mb-2">Add them to your file and import again</p>
                       <ul className="list-decimal pl-5 space-y-1 font-medium">

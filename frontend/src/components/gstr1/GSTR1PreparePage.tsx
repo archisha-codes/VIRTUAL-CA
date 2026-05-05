@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { 
+import {
   Filter,
   Upload,
   Shield,
@@ -31,11 +31,12 @@ import GSTR1FiltersDrawer, { type GSTR1Filters } from './GSTR1FiltersDrawer';
 import GSTR1ImportDrawer from './GSTR1ImportDrawer';
 import GSTR1ActionsDropdown from './GSTR1ActionsDropdown';
 import GSTR1SummaryDrawer from './GSTR1SummaryDrawer';
+import GSTR1DrawerFlow from './GSTR1DrawerFlow';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { 
-  processGSTR1Excel, 
-  saveGstr1State, 
+import {
+  processGSTR1Excel,
+  saveGstr1State,
   getGstr1State,
   downloadGSTR1PANSummary,
   syncGSTR1FromGSTN,
@@ -62,7 +63,8 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
   const [importDrawerOpen, setImportDrawerOpen] = useState(false);
-  
+  const [otpDrawerOpen, setOtpDrawerOpen] = useState(false);
+
   // Custom View Sections Drawer State
   const [summaryDrawerOpen, setsummaryDrawerOpen] = useState(false);
   const [selectedSummaryGstin, setselectedSummaryGstin] = useState('');
@@ -83,22 +85,22 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
     try {
       // Try to load saved state from backend
       const response = await getGstr1State(workspaceId, gstin, returnPeriod);
-      
+
       if (response.success && response.data) {
         // Data exists - transform to table format
         const savedState = response.data;
-        
+
         if (savedState.gstr1_tables || savedState.upload_result) {
           const data = savedState.upload_result as unknown as GSTR1ProcessResponse;
           if (data?.data) {
             setUploadResult(data);
-            
+
             // Transform to business data format
             const businessData = transformToBusinessData(data, gstin);
             setBusinesses(businessData);
           }
         }
-        
+
         if (savedState.last_saved) {
           setLastSaved(new Date(savedState.last_saved));
         }
@@ -124,19 +126,19 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
   // Transform backend data to table format
   const transformToBusinessData = (data: GSTR1ProcessResponse, selectedGstin: string): GSTR1BusinessData[] => {
     const gstr1Data = data.data;
-    
+
     // Calculate totals from all sections
     const b2bCount = gstr1Data.b2b?.length || 0;
     const b2clCount = gstr1Data.b2cl?.length || 0;
     const b2csCount = gstr1Data.b2cs?.length || 0;
     const expCount = gstr1Data.exp?.length || 0;
     const cdnrCount = gstr1Data.cdnr?.length || 0;
-    
+
     // Calculate totals
     const normalize = (val: any): number => {
       if (val === null || val === undefined || val === '') return 0;
       if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
-      
+
       // Remove all non-numeric characters except decimal point and minus sign
       const clean = String(val).replace(/[^\d.-]/g, '');
       const parsed = parseFloat(clean);
@@ -169,7 +171,7 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
         }, 0);
       }, 0);
     };
-    
+
     const calculateTax = (arr: any[], taxField: 'igst' | 'cgst' | 'sgst' | 'cess') => {
       const fieldMap: Record<string, string[]> = {
         'igst': ['igst_amount', 'iamt', 'igst', 'integrated_tax'],
@@ -204,7 +206,7 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
     const totalTax = totalIgst + totalCgst + totalSgst + totalCess;
 
     // Create sections data
-    const sections = [] as Array<{id: string; name: string; docCount: number; taxableAmount: number; tax: number}>;
+    const sections = [] as Array<{ id: string; name: string; docCount: number; taxableAmount: number; tax: number }>;
     if (b2bCount > 0) sections.push({ id: 'b2b', name: 'B2B', docCount: b2bCount, taxableAmount: calculateTotal(b2bData), tax: calculateTax(b2bData, 'igst') + calculateTax(b2bData, 'cgst') + calculateTax(b2bData, 'sgst') + calculateTax(b2bData, 'cess') });
     if (b2clCount > 0) sections.push({ id: 'b2cl', name: 'B2CL', docCount: b2clCount, taxableAmount: calculateTotal(b2clData), tax: calculateTax(b2clData, 'igst') + calculateTax(b2clData, 'cess') });
     if (b2csCount > 0) sections.push({ id: 'b2cs', name: 'B2CS', docCount: b2csCount, taxableAmount: calculateTotal(b2csData), tax: calculateTax(b2csData, 'cgst') + calculateTax(b2csData, 'sgst') + calculateTax(b2csData, 'cess') });
@@ -220,6 +222,7 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
         legalName: selectedGstin,
         state: 'State',
         status: 'pending',
+        isConnected: currentOrganization?.gstProfiles?.find(p => p.gstin === selectedGstin)?.is_active || false,
         docCount: totalDocs,
         taxableAmount,
         totalTax,
@@ -252,14 +255,14 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
       });
 
       const result = await processGSTR1Excel(file, mappingDict, gstin, returnPeriod, workspaceId);
-      
+
       if (result.success && result.data) {
         setUploadResult(result);
-        
+
         // Transform to table format
         const businessData = transformToBusinessData(result, gstin);
         setBusinesses(businessData);
-        
+
         // Save to backend
         await saveGstr1State(workspaceId!, gstin, returnPeriod, {
           currentStep: 'upload',
@@ -271,9 +274,9 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
           validationResult: null,
           filingResult: null,
         });
-        
+
         setLastSaved(new Date());
-        
+
         toast({
           title: 'File Imported',
           description: `Processed ${result.total_records || 0} records successfully`,
@@ -364,23 +367,41 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
   // Handle validate
   const handleValidate = () => {
     if (businesses.length === 0) {
-      navigate('/gst/gstr1/prepare', { 
-        state: { 
-          gstin, 
-          returnPeriod, 
-          step: 'upload'
-        } 
+      toast({
+        title: 'No Data',
+        description: 'Please upload data before validating.',
+        variant: 'destructive',
       });
       return;
     }
-    // Navigate to classification step in workflow
-    navigate('/gst/gstr1/prepare', { 
-      state: { 
-        gstin, 
-        returnPeriod, 
-        step: 'classification'
-      } 
-    });
+
+    // Check if any selected GSTINs (or the main one) are not connected
+    const unconnectedGstins = businesses.flatMap(b => b.gstins)
+      .filter(g => (selectedGstins.length === 0 || selectedGstins.includes(g.gstin)) && !g.isConnected);
+
+    if (unconnectedGstins.length > 0) {
+      // Open the Connect GSTINs drawer
+      setOtpDrawerOpen(true);
+    } else {
+      // Proceed to checking errors step
+      toast({
+        title: 'Validation Successful',
+        description: 'All GSTINs connected. Moving to error checks...',
+      });
+
+      // In a real app, this would navigate to the next step
+      // For now, we'll simulate the validation success
+      setTimeout(() => {
+        navigate('/gst/gstr1/prepare', {
+          state: {
+            gstin,
+            returnPeriod,
+            step: 'checking-errors',
+            uploadResult
+          }
+        });
+      }, 1000);
+    }
   };
 
   // Handle view sections
@@ -399,11 +420,7 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
   };
 
   return (
-    <div 
-      className="min-h-screen bg-slate-50 dark:bg-slate-900"
-      aria-hidden={importDrawerOpen || summaryDrawerOpen || filtersDrawerOpen ? "true" : undefined}
-      {...((importDrawerOpen || summaryDrawerOpen || filtersDrawerOpen) ? { inert: "" } : {})}
-    >
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
       {/* Header */}
       <div className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-6 py-4">
         <div className="max-w-7xl mx-auto">
@@ -426,50 +443,50 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
                 </p>
               </div>
             </div>
-            
+
             {/* Action Bar */}
             <div className="flex items-center gap-2">
               {/* E-Invoice vs Sales Register Recon Button */}
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 className="gap-2 border-blue-300 text-blue-700 hover:bg-blue-50"
                 onClick={handleReconciliation}
               >
                 <ArrowRightLeft className="h-4 w-4" />
                 E-Invoice (GSTR-1) vs SR Recon
               </Button>
-              
+
               {/* Filters Button */}
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 className="gap-2"
                 onClick={() => setFiltersDrawerOpen(true)}
               >
                 <Filter className="h-4 w-4" />
                 Filters
               </Button>
-              
+
               {/* Import File Button */}
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 className="gap-2"
                 onClick={() => setImportDrawerOpen(true)}
               >
                 <Upload className="h-4 w-4" />
                 Import File
               </Button>
-              
+
               {/* Actions Dropdown */}
-              <GSTR1ActionsDropdown 
+              <GSTR1ActionsDropdown
                 onDownloadPAN={handleDownloadPANSummary}
                 onSyncGSTN={handleSyncFromGSTN}
                 onSelectNIL={handleSelectForNIL}
                 onSelectSource={handleSelectSource}
-                onDelete={() => {}}
+                onDelete={() => { }}
               />
-              
+
               {/* Validate and Upload Button */}
-              <Button 
+              <Button
                 className="gap-2 bg-corporate-primary hover:bg-corporate-primaryHover"
                 onClick={handleValidate}
               >
@@ -478,7 +495,7 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
               </Button>
             </div>
           </div>
-          
+
           {/* Second row with last saved */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -518,14 +535,14 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
           </div>
         ) : (
           /* Data Table */
-          <GSTR1PrepareTable 
+          <GSTR1PrepareTable
             businesses={businesses}
             onSelectionChange={setSelectedGstins}
             onViewSections={handleViewSections}
           />
         )}
       </div>
-      
+
       {/* Filters Drawer */}
       <GSTR1FiltersDrawer
         open={filtersDrawerOpen}
@@ -534,7 +551,7 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
         availableGstins={[gstin]}
         initialFilters={activeFilters}
       />
-      
+
       {/* Import Drawer */}
       <GSTR1ImportDrawer
         open={importDrawerOpen}
@@ -542,7 +559,7 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
         onImport={handleFileImport}
       />
       {/* Drawers */}
-      <GSTR1SummaryDrawer 
+      <GSTR1SummaryDrawer
         open={summaryDrawerOpen}
         onOpenChange={setsummaryDrawerOpen}
         gstin={selectedSummaryGstin}
@@ -554,6 +571,27 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
         }}
         returnPeriod={returnPeriod}
       />
+
+      {otpDrawerOpen && (
+        <GSTR1DrawerFlow
+          open={otpDrawerOpen}
+          onOpenChange={setOtpDrawerOpen}
+          initialDrawer="otp"
+          initialGstins={[gstin]}
+          initialPeriod={returnPeriod}
+          onContinue={() => {
+            setOtpDrawerOpen(false);
+            // Navigate to checking errors step
+            navigate('/gst/gstr1/prepare', {
+              state: {
+                gstin,
+                returnPeriod,
+                step: 'checking-errors'
+              }
+            });
+          }}
+        />
+      )}
     </div>
   );
 }

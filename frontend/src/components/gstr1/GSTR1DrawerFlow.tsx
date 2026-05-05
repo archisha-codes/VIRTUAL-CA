@@ -72,54 +72,89 @@ interface GSTR1DrawerFlowProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onContinue: (selectedGstins: string[], returnPeriod: string) => void;
+  initialDrawer?: 'business' | 'otp';
+  initialGstins?: string[];
+  initialPeriod?: string;
 }
 
 // Error fallback data for when API fails
 const fallbackBusinesses: BusinessEntity[] = [];
 
-// Generate return periods
+// Generate return periods based on official GST rules
 const generateReturnPeriods = (): ReturnPeriod[] => {
   const periods: ReturnPeriod[] = [];
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 
                   'July', 'August', 'September', 'October', 'November', 'December'];
-  const quarters = ['Q1', 'Q2', 'Q3', 'Q4'];
+  const quarters = ['Q1 (Apr-Jun)', 'Q2 (Jul-Sep)', 'Q3 (Oct-Dec)', 'Q4 (Jan-Mar)'];
   const currentDate = new Date();
+  const currentMonth = currentDate.getMonth();
+  const currentYear = currentDate.getFullYear();
   
-  // Add monthly periods for the last 12 months, including the current month
-  for (let i = 11; i >= 0; i--) {
-    const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
-    const month = date.getMonth();
-    const year = date.getFullYear();
-    const monthStr = String(month + 1).padStart(2, '0');
+  // Add monthly periods for the current year up to current month
+  // Rule: Returns are filed AFTER the month ends. 
+  // Current month's data can only be filed from the 1st of next month.
+  for (let i = 0; i <= currentMonth; i++) {
+    const monthStr = String(i + 1).padStart(2, '0');
+    const isFuture = false; // All months up to current are "past" or "present"
+    const isOpen = i < currentMonth; // Only previous months are "open" for filing
+    
     periods.push({
-      value: `${monthStr}${year}`,
-      label: `${months[month]} ${year}`,
+      value: `${monthStr}${currentYear}`,
+      label: `${months[i]} ${currentYear}${!isOpen ? ' (Not Yet Open)' : ''}`,
       type: 'monthly'
     });
   }
+
+  // Add a few months from previous year if we are in early months
+  if (currentMonth < 3) {
+    for (let i = 9; i < 12; i++) {
+      const monthStr = String(i + 1).padStart(2, '0');
+      periods.unshift({
+        value: `${monthStr}${currentYear - 1}`,
+        label: `${months[i]} ${currentYear - 1}`,
+        type: 'monthly'
+      });
+    }
+  }
   
-  // Add quarterly periods for the current year
-  const currentYear = currentDate.getFullYear();
+  // Add quarterly periods
+  // Q1: Apr-Jun, Q2: Jul-Sep, Q3: Oct-Dec, Q4: Jan-Mar
+  const qValues = ['06', '09', '12', '03'];
   for (let q = 0; q < 4; q++) {
+    const qYear = q === 3 ? currentYear : (currentMonth < 3 ? currentYear - 1 : currentYear);
+    const qOpen = (q === 0 && currentMonth >= 6) || 
+                  (q === 1 && currentMonth >= 9) || 
+                  (q === 2 && currentMonth >= 12) || 
+                  (q === 3 && currentMonth >= 3);
+
     periods.push({
-      value: `Q${q + 1}${currentYear}`,
-      label: `${quarters[q]} ${currentYear}`,
+      value: `Q${q + 1}${qYear}`,
+      label: `${quarters[q]} ${qYear}${!qOpen ? ' (Not Yet Open)' : ''}`,
       type: 'quarterly'
     });
   }
   
-  return periods;
+  // Sort periods to show most recent first
+  return periods.sort((a, b) => {
+    const aYear = parseInt(a.value.slice(-4));
+    const bYear = parseInt(b.value.slice(-4));
+    if (aYear !== bYear) return bYear - aYear;
+    
+    const aMonth = a.value.startsWith('Q') ? parseInt(a.value[1]) * 3 : parseInt(a.value.slice(0, 2));
+    const bMonth = b.value.startsWith('Q') ? parseInt(b.value[1]) * 3 : parseInt(b.value.slice(0, 2));
+    return bMonth - aMonth;
+  });
 };
 
-export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue }: GSTR1DrawerFlowProps) {
+export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initialDrawer = 'business', initialGstins = [], initialPeriod = '' }: GSTR1DrawerFlowProps) {
   const { toast } = useToast();
   const { currentOrganization, gstProfiles, currentGstProfile } = useAuth();
   
   // State for business selector
   const [businesses, setBusinesses] = useState<BusinessEntity[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedGstins, setSelectedGstins] = useState<Set<string>>(new Set());
-  const [returnPeriod, setReturnPeriod] = useState<string>('');
+  const [selectedGstins, setSelectedGstins] = useState<Set<string>>(new Set(initialGstins));
+  const [returnPeriod, setReturnPeriod] = useState<string>(initialPeriod);
   const [returnPeriods, setReturnPeriods] = useState<ReturnPeriod[]>([]);
   const [isLoadingBusinesses, setIsLoadingBusinesses] = useState(false);
   
@@ -131,7 +166,12 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue }: GSTR
   const [otpRequestId, setOtpRequestId] = useState<string>('');
   
   // Current drawer step
-  const [currentDrawer, setCurrentDrawer] = useState<'business' | 'otp'>('business');
+  const [currentDrawer, setCurrentDrawer] = useState<'business' | 'otp'>(initialDrawer);
+
+  // Sync props if they change
+  useEffect(() => {
+    if (initialDrawer) setCurrentDrawer(initialDrawer);
+  }, [initialDrawer]);
 
   const buildBusinessesFromGstProfiles = (): BusinessEntity[] => {
     const grouped = new Map<string, BusinessEntity>();
@@ -174,6 +214,16 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue }: GSTR
   // Fetch businesses from API on mount
   useEffect(() => {
     const fetchBusinesses = async () => {
+      // Set return periods first
+      const generatedPeriods = generateReturnPeriods();
+      setReturnPeriods(generatedPeriods);
+      
+      // Default to the first open period if available
+      const firstOpen = generatedPeriods.find(p => !p.label.includes('Not Yet Open'));
+      if (firstOpen && !returnPeriod) {
+        setReturnPeriod(firstOpen.value);
+      }
+
       if (!currentOrganization?.id) {
         setBusinesses(buildBusinessesFromGstProfiles());
         setIsLoadingBusinesses(false);
@@ -440,7 +490,7 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue }: GSTR
   
   // Render business selector drawer
   const renderBusinessSelector = () => (
-    <Drawer open={open && currentDrawer === 'business'} onOpenChange={onOpenChange}>
+    <Drawer open={open && currentDrawer === 'business'} onOpenChange={(isOpen) => { if (currentDrawer === 'business') onOpenChange(isOpen); }}>
       <DrawerContent className="max-w-md mx-auto h-[90vh]">
         <DrawerHeader>
           <DrawerTitle>GSTR-1/IFF Form</DrawerTitle>
@@ -587,11 +637,12 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue }: GSTR
     const connectedCount = connectedGstins.length;
 
     return (
-      <Drawer open={currentDrawer === 'otp'} onOpenChange={() => {}}>
+      <Drawer open={open && currentDrawer === 'otp'} onOpenChange={(isOpen) => { if (currentDrawer === 'otp') onOpenChange(isOpen); }}>
         <DrawerContent className="w-full sm:w-[400px] mx-auto sm:ml-auto sm:mr-0 h-full right-0 left-auto mt-0 rounded-none border-l">
           <DrawerHeader className="border-b pb-4">
             <div className="flex justify-between items-center">
               <DrawerTitle className="text-lg">Generate OTP to connect GSTINs</DrawerTitle>
+              <DrawerDescription className="sr-only">Connect your GSTINs securely</DrawerDescription>
               <DrawerClose asChild>
                 <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full"><X className="h-4 w-4" /></Button>
               </DrawerClose>

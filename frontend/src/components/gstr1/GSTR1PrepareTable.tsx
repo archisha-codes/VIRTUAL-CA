@@ -9,10 +9,10 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  ChevronDown, 
-  ChevronRight, 
-  CheckCircle, 
+import {
+  ChevronDown,
+  ChevronRight,
+  CheckCircle,
   Circle,
   FileText,
   Building2,
@@ -23,13 +23,13 @@ import {
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
-import { 
-  Table, 
-  TableBody, 
-  TableCell, 
-  TableHead, 
-  TableHeader, 
-  TableRow 
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
 } from '@/components/ui/table';
 import {
   DropdownMenu,
@@ -63,6 +63,7 @@ export interface GSTR1GstinData {
   totalInvoiceValue: number;
   // Sections data
   sections?: GSTR1SectionData[];
+  isConnected?: boolean;
 }
 
 export interface GSTR1SectionData {
@@ -232,7 +233,7 @@ export default function GSTR1PrepareTable({
             return (
               <React.Fragment key={business.id}>
                 {/* Business Row */}
-                <TableRow 
+                <TableRow
                   className="hover:bg-slate-50 dark:hover:bg-slate-700/30 cursor-pointer"
                   onClick={() => toggleBusinessExpansion(business.id)}
                 >
@@ -244,7 +245,7 @@ export default function GSTR1PrepareTable({
                     )}
                   </TableCell>
                   <TableCell className="w-10">
-                    <Checkbox 
+                    <Checkbox
                       checked={allSelected}
                       onCheckedChange={(checked) => {
                         // Prevent row click when clicking checkbox
@@ -298,16 +299,16 @@ export default function GSTR1PrepareTable({
                 {/* Child GSTIN Rows */}
                 {isExpanded && business.gstins.map((gstin) => {
                   const isSectionExpanded = expandedSections.has(gstin.id);
-                  
+
                   return (
                     <React.Fragment key={gstin.id}>
-                      <TableRow 
+                      <TableRow
                         className="bg-slate-50/50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-700/30"
                       >
                         <TableCell colSpan={2}></TableCell>
                         <TableCell className="pl-8">
                           <div className="flex items-center gap-2">
-                            <Checkbox 
+                            <Checkbox
                               checked={selectedGstins.has(gstin.gstin)}
                               onCheckedChange={() => toggleGstinSelection(gstin.gstin)}
                               onClick={(e) => e.stopPropagation()}
@@ -318,12 +319,35 @@ export default function GSTR1PrepareTable({
                                   {gstin.state.toUpperCase()} {gstin.gstin}
                                 </span>
                               </div>
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); onViewSections?.(gstin.gstin); }}
-                                className="text-[10px] text-blue-600 font-bold text-left uppercase hover:underline mt-1.5 focus:outline-none tracking-tight"
-                              >
-                                View Sections
-                              </button>
+                              <div className="flex items-center gap-2 mt-1.5">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); onViewSections?.(gstin.gstin); }}
+                                  className="text-[10px] text-blue-600 font-bold uppercase hover:underline focus:outline-none tracking-tight"
+                                >
+                                  View Sections
+                                </button>
+                                {!gstin.isConnected && (
+                                  <>
+                                    <span className="text-slate-300 text-[10px]">•</span>
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); /* Trigger connect logic */ }}
+                                      className="text-[10px] text-orange-600 font-bold uppercase hover:underline focus:outline-none tracking-tight flex items-center gap-1"
+                                    >
+                                      <Link2 className="h-3 w-3" />
+                                      Connect
+                                    </button>
+                                  </>
+                                )}
+                                {gstin.isConnected && (
+                                  <>
+                                    <span className="text-slate-300 text-[10px]">•</span>
+                                    <span className="text-[10px] text-green-600 font-bold uppercase flex items-center gap-1">
+                                      <CheckCircle className="h-3 w-3" />
+                                      Connected
+                                    </span>
+                                  </>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </TableCell>
