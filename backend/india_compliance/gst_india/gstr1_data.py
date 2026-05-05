@@ -1681,7 +1681,7 @@ def generate_gstr1_tables(
             cdnur_invoices.append(format_invoice_for_cdnur(row))
             if is_credit_note:
                 cdnur_credit_notes += 1
-            elif is_debit_note:
+            elif is_debit_note_type:
                 cdnur_debit_notes += 1
 
         elif category == GSTR1_Category.NIL_EXEMPT.value:

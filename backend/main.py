@@ -7,11 +7,19 @@ Includes JWT authentication, rate limiting, and audit logging.
 """
 from india_compliance.gst_india.engine_core.engine import GSTR1Engine
 from india_compliance.gst_india.exporters.gstr1_excel import export_gstr1_excel
-# Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Security, Depends, Request, BackgroundTasks, Form, Query, Body
+# Database Imports
+from sqlalchemy.orm import Session
+from database import get_db
+from repository import save_gstr1_documents
+from routers import workspace_router, business_router
+from api.dependencies import get_current_user, verify_workspace_access, get_current_business
+from models.tenant_models import Business
+from uuid import UUID
+
+from fastapi import FastAPI, File, UploadFile, HTTPException, Security, Depends, Request, BackgroundTasks, Form, Query, Body, Path
 from fastapi.security import APIKeyHeader, APIKeyQuery, HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
@@ -55,9 +63,11 @@ JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "jwt-secret-key-change-in-prod
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
-# ============ DATABASE MODELS (In-Memory with proper structure) ============
+# Database models are now handled via SQLAlchemy in tenant_models.py
 
-# User Table
+# ============ Legacy in-memory user store (used by JWT auth in main.py) ============
+# The SQLAlchemy User model in tenant_models.py is used by the /api/workspaces routes.
+# This dict remains for the /login, /me, /register, and get_current_user endpoints.
 users_db: List[Dict[str, Any]] = [
     {
         "id": "1",
@@ -78,18 +88,6 @@ users_db: List[Dict[str, Any]] = [
         "created_at": datetime.utcnow().isoformat() + "Z"
     }
 ]
-
-# Workspace Table - Multi-tenant workspaces
-workspaces_db: List[Dict[str, Any]] = []
-
-# Business Table - Business entities under workspace
-businesses_db: List[Dict[str, Any]] = []
-
-# GSTIN Table - GSTIN registrations under business
-gstins_db: List[Dict[str, Any]] = []
-
-# UserWorkspace Table - User-Workspace associations
-user_workspaces_db: List[Dict[str, Any]] = []
 
 # Support Conversation Table
 support_conversations_db: List[Dict[str, Any]] = []
@@ -425,6 +423,10 @@ app = FastAPI(
     version="1.1.0",
 )
 
+# Include new routers for multi-tenant architecture with /api prefix
+app.include_router(workspace_router.router, prefix="/api")
+app.include_router(business_router.router, prefix="/api")
+
 # Allow frontend connection (React)
 app.add_middleware(
     CORSMiddleware,
@@ -594,1946 +596,6 @@ async def get_audit_logs(
         "logs": logs,
         "total": len(logs)
     }
-
-
-# ============ WORKSPACES API ============
-
-@app.get("/api/workspaces", tags=["Workspaces"])
-async def list_workspaces(
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    List all workspaces the current user has access to.
-    """
-    user_id = current_user.get("sub")
-    
-    # Get workspaces where user is a member
-    user_workspaces = [uw for uw in user_workspaces_db if uw.get("user_id") == user_id]
-    workspace_ids = [uw.get("workspace_id") for uw in user_workspaces]
-    
-    # Get workspace details
-    workspaces = [w for w in workspaces_db if w.get("id") in workspace_ids]
-    
-    # Add loading state
-    return {
-        "loading": False,
-        "data": workspaces,
-        "total": len(workspaces)
-    }
-
-
-@app.post("/api/workspaces", tags=["Workspaces"])
-async def create_workspace(
-    workspace: WorkspaceCreate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Create a new workspace. The current user becomes the owner/admin.
-    """
-    user_id = current_user.get("sub")
-    
-    # Create workspace
-    new_workspace = {
-        "id": generate_id(),
-        "name": workspace.name,
-        "owner_id": user_id,
-        "settings": workspace.settings or {},
-        "created_at": datetime.utcnow().isoformat() + "Z"
-    }
-    workspaces_db.append(new_workspace)
-    
-    # Add owner as admin in user_workspaces
-    user_workspace = {
-        "id": generate_id(),
-        "user_id": user_id,
-        "workspace_id": new_workspace["id"],
-        "role": "admin"
-    }
-    user_workspaces_db.append(user_workspace)
-    
-    return {
-        "loading": False,
-        "data": new_workspace
-    }
-
-
-@app.get("/api/workspaces/{workspace_id}", tags=["Workspaces"])
-async def get_workspace(
-    workspace_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Get workspace details by ID.
-    """
-    user_id = current_user.get("sub")
-    
-    # Check user has access
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Access denied to this workspace")
-    
-    workspace = next((w for w in workspaces_db if w.get("id") == workspace_id), None)
-    
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
-    # Add user role in response
-    workspace["user_role"] = user_workspace.get("role")
-    
-    return {
-        "loading": False,
-        "data": workspace
-    }
-
-
-@app.put("/api/workspaces/{workspace_id}", tags=["Workspaces"])
-async def update_workspace(
-    workspace_id: str,
-    workspace_update: WorkspaceUpdate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Update workspace details. Only admins can update.
-    """
-    user_id = current_user.get("sub")
-    
-    # Check user is admin
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-    
-    if not user_workspace or user_workspace.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can update workspace")
-    
-    # Find and update workspace
-    for i, workspace in enumerate(workspaces_db):
-        if workspace.get("id") == workspace_id:
-            if workspace_update.name:
-                workspaces_db[i]["name"] = workspace_update.name
-            if workspace_update.settings:
-                workspaces_db[i]["settings"] = workspace_update.settings
-            
-            return {
-                "loading": False,
-                "data": workspaces_db[i]
-            }
-    
-    raise HTTPException(status_code=404, detail="Workspace not found")
-
-
-@app.delete("/api/workspaces/{workspace_id}", tags=["Workspaces"])
-async def delete_workspace(
-    workspace_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Delete workspace. Only the owner can delete.
-    """
-    user_id = current_user.get("sub")
-    
-    workspace = next((w for w in workspaces_db if w.get("id") == workspace_id), None)
-    
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
-    if workspace.get("owner_id") != user_id:
-        raise HTTPException(status_code=403, detail="Only owner can delete workspace")
-    
-    # Remove workspace - use slice assignment to modify in place
-    workspaces_db[:] = [w for w in workspaces_db if w.get("id") != workspace_id]
-    
-    # Remove related data
-    user_workspaces_db[:] = [uw for uw in user_workspaces_db if uw.get("workspace_id") != workspace_id]
-    
-    return {
-        "loading": False,
-        "message": "Workspace deleted successfully"
-    }
-
-
-# ============ BUSINESSES API ============
-
-@app.get("/api/workspaces/{workspace_id}/businesses", tags=["Businesses"])
-async def list_businesses(
-    workspace_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    List all businesses in a workspace.
-    """
-    user_id = current_user.get("sub")
-    
-    # Check user has access to workspace
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Access denied to this workspace")
-    
-    # Get businesses
-    businesses = [b for b in businesses_db if b.get("workspace_id") == workspace_id]
-    
-    return {
-        "loading": False,
-        "data": businesses,
-        "total": len(businesses)
-    }
-
-
-@app.get("/api/workspaces/{workspace_id}/businesses-with-gstins", tags=["Workspaces"])
-async def get_businesses_with_gstins(
-    workspace_id: str,
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
-):
-    """Return businesses in a workspace grouped with their GSTINs for selector flows."""
-    try:
-        user_id = (current_user or {}).get("sub")
-        if user_id:
-            user_workspace = next(
-                (
-                    uw for uw in user_workspaces_db
-                    if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id
-                ),
-                None,
-            )
-
-            if not user_workspace:
-                return {"success": True, "data": [], "total": 0}
-
-        workspace_exists = any(w.get("id") == workspace_id for w in workspaces_db)
-        if not workspace_exists:
-            return {"success": True, "data": [], "total": 0}
-
-        grouped_businesses: List[Dict[str, Any]] = []
-        for business in [b for b in businesses_db if b.get("workspace_id") == workspace_id]:
-            business_id = business.get("id")
-            business_gstins = [g for g in gstins_db if g.get("business_id") == business_id]
-
-            gstin_rows: List[Dict[str, Any]] = []
-            for gstin_record in business_gstins:
-                gstin_number = str(gstin_record.get("gstin_number") or gstin_record.get("gstin") or "").upper().strip()
-                if not gstin_number:
-                    continue
-
-                status_raw = str(gstin_record.get("status") or "active").lower().strip()
-                if status_raw in {"composite", "composition"}:
-                    display_status = "Composite"
-                elif status_raw in {"casual", "inactive", "suspended"}:
-                    display_status = "Casual"
-                else:
-                    display_status = "Regular"
-
-                state_code = gstin_number[:2] if len(gstin_number) >= 2 else ""
-                gstin_rows.append({
-                    "id": gstin_record.get("id") or gstin_number,
-                    "gstin": gstin_number,
-                    "state": get_state_from_code(state_code) if state_code.isdigit() else (state_code or "Unknown State"),
-                    "status": display_status,
-                    "isConnected": status_raw == "active",
-                    "lastVerified": gstin_record.get("registration_date") or gstin_record.get("created_at"),
-                })
-
-            grouped_businesses.append({
-                "id": business_id or generate_id(),
-                "name": business.get("name") or "Unnamed Business",
-                "pan": business.get("pan") or (gstin_rows[0]["gstin"][:10] if gstin_rows else ""),
-                "gstins": gstin_rows,
-            })
-
-        return {
-            "success": True,
-            "data": grouped_businesses,
-            "total": len(grouped_businesses),
-        }
-    except Exception as e:
-        logger.exception(f"Error building businesses-with-gstins for workspace {workspace_id}: {str(e)}")
-        return {
-            "success": False,
-            "error": str(e),
-            "data": [],
-            "total": 0,
-        }
-
-
-@app.post("/api/workspaces/{workspace_id}/businesses", tags=["Businesses"])
-async def create_business(
-    workspace_id: str,
-    business: BusinessCreate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Create a new business in a workspace.
-    """
-    user_id = current_user.get("sub")
-    
-    # Check user has access
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Access denied to this workspace")
-    
-    # Create business
-    new_business = {
-        "id": generate_id(),
-        "workspace_id": workspace_id,
-        "name": business.name,
-        "pan": business.pan,
-        "address": business.address,
-        "created_at": datetime.utcnow().isoformat() + "Z"
-    }
-    businesses_db.append(new_business)
-    
-    return {
-        "loading": False,
-        "data": new_business
-    }
-
-
-@app.get("/api/businesses/{business_id}", tags=["Businesses"])
-async def get_business(
-    business_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Get business details by ID.
-    """
-    user_id = current_user.get("sub")
-    
-    business = next((b for b in businesses_db if b.get("id") == business_id), None)
-    
-    if not business:
-        raise HTTPException(status_code=404, detail="Business not found")
-    
-    # Check user has access to workspace
-    workspace_id = business.get("workspace_id")
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Access denied to this business")
-    
-    return {
-        "loading": False,
-        "data": business
-    }
-
-
-@app.put("/api/businesses/{business_id}", tags=["Businesses"])
-async def update_business(
-    business_id: str,
-    business_update: BusinessUpdate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Update business details.
-    """
-    user_id = current_user.get("sub")
-    
-    for i, business in enumerate(businesses_db):
-        if business.get("id") == business_id:
-            # Check access
-            workspace_id = business.get("workspace_id")
-            user_workspace = next((uw for uw in user_workspaces_db 
-                if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-            
-            if not user_workspace:
-                raise HTTPException(status_code=403, detail="Access denied to this business")
-            
-            # Update
-            if business_update.name:
-                businesses_db[i]["name"] = business_update.name
-            if business_update.pan:
-                businesses_db[i]["pan"] = business_update.pan
-            if business_update.address:
-                businesses_db[i]["address"] = business_update.address
-            
-            return {
-                "loading": False,
-                "data": businesses_db[i]
-            }
-    
-    raise HTTPException(status_code=404, detail="Business not found")
-
-
-@app.delete("/api/businesses/{business_id}", tags=["Businesses"])
-async def delete_business(
-    business_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Delete a business.
-    """
-    user_id = current_user.get("sub")
-    
-    for i, business in enumerate(businesses_db):
-        if business.get("id") == business_id:
-            # Check access (must be admin)
-            workspace_id = business.get("workspace_id")
-            user_workspace = next((uw for uw in user_workspaces_db 
-                if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-            
-            if not user_workspace or user_workspace.get("role") != "admin":
-                raise HTTPException(status_code=403, detail="Only admins can delete business")
-            
-            # Remove business and related GSTINs
-            deleted = businesses_db.pop(i)
-            gstins_db = [g for g in gstins_db if g.get("business_id") != business_id]
-            
-            return {
-                "loading": False,
-                "message": "Business deleted successfully"
-            }
-    
-    raise HTTPException(status_code=404, detail="Business not found")
-
-
-# ============ GSTINS API ============
-
-@app.get("/api/businesses/{business_id}/gstins", tags=["GSTINs"])
-async def list_gstins(
-    business_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    List all GSTINs for a business.
-    """
-    user_id = current_user.get("sub")
-    
-    # Check access
-    business = next((b for b in businesses_db if b.get("id") == business_id), None)
-    if not business:
-        raise HTTPException(status_code=404, detail="Business not found")
-    
-    workspace_id = business.get("workspace_id")
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    gstins = [g for g in gstins_db if g.get("business_id") == business_id]
-    
-    return {
-        "loading": False,
-        "data": gstins,
-        "total": len(gstins)
-    }
-
-
-@app.post("/api/businesses/{business_id}/gstins", tags=["GSTINs"])
-async def create_gstin(
-    business_id: str,
-    gstin: GSTINCreate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Add a new GSTIN to a business.
-    """
-    user_id = current_user.get("sub")
-    
-    # Check access
-    business = next((b for b in businesses_db if b.get("id") == business_id), None)
-    if not business:
-        raise HTTPException(status_code=404, detail="Business not found")
-    
-    workspace_id = business.get("workspace_id")
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    # Create GSTIN
-    new_gstin = {
-        "id": generate_id(),
-        "business_id": business_id,
-        "gstin_number": gstin.gstin_number.upper(),
-        "status": gstin.status,
-        "registration_date": gstin.registration_date or (datetime.utcnow().isoformat() + "Z"),
-        "created_at": datetime.utcnow().isoformat() + "Z"
-    }
-    gstins_db.append(new_gstin)
-    
-    return {
-        "loading": False,
-        "data": new_gstin
-    }
-
-
-@app.get("/api/gstins/{gstin_id}", tags=["GSTINs"])
-async def get_gstin(
-    gstin_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Get GSTIN details by ID.
-    """
-    user_id = current_user.get("sub")
-    
-    gstin = next((g for g in gstins_db if g.get("id") == gstin_id), None)
-    
-    if not gstin:
-        raise HTTPException(status_code=404, detail="GSTIN not found")
-    
-    # Check access via business
-    business = next((b for b in businesses_db if b.get("id") == gstin.get("business_id")), None)
-    if business:
-        workspace_id = business.get("workspace_id")
-        user_workspace = next((uw for uw in user_workspaces_db 
-            if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-        
-        if not user_workspace:
-            raise HTTPException(status_code=403, detail="Access denied")
-    
-    return {
-        "loading": False,
-        "data": gstin
-    }
-
-
-@app.put("/api/gstins/{gstin_id}", tags=["GSTINs"])
-async def update_gstin(
-    gstin_id: str,
-    gstin_update: GSTINUpdate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Update GSTIN details.
-    """
-    for i, gstin in enumerate(gstins_db):
-        if gstin.get("id") == gstin_id:
-            if gstin_update.gstin_number:
-                gstins_db[i]["gstin_number"] = gstin_update.gstin_number.upper()
-            if gstin_update.status:
-                gstins_db[i]["status"] = gstin_update.status
-            
-            return {
-                "loading": False,
-                "data": gstins_db[i]
-            }
-    
-    raise HTTPException(status_code=404, detail="GSTIN not found")
-
-
-@app.delete("/api/gstins/{gstin_id}", tags=["GSTINs"])
-async def delete_gstin(
-    gstin_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Delete a GSTIN.
-    """
-    for i, gstin in enumerate(gstins_db):
-        if gstin.get("id") == gstin_id:
-            gstins_db.pop(i)
-            return {
-                "loading": False,
-                "message": "GSTIN deleted successfully"
-            }
-    
-    raise HTTPException(status_code=404, detail="GSTIN not found")
-
-
-# ============ GSTIN OTP AUTHENTICATION API ============
-
-# In-memory storage for OTP requests (in production, use Redis or database)
-otp_requests_db: Dict[str, Dict[str, Any]] = {}
-
-@app.post("/api/gstin/generate-otp", tags=["GSTIN Authentication"])
-async def generate_gstin_otp(
-    workspace_id: str = Body(..., embed=True),
-    gstin: str = Body(..., embed=True),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Generate OTP for GSTIN verification/connection.
-    
-    This endpoint initiates the OTP authentication process for connecting
-    a GSTIN to the workspace for GSTR-1 filing.
-    """
-    user_id = current_user.get("sub")
-    
-    # Validate GSTIN format
-    # Validate GSTIN basic length (allow demo format)
-    if not gstin or len(gstin) < 15:
-        return {
-            "success": False,
-            "message": "Invalid GSTIN format. Must be at least 15 characters."
-        }
-    
-    # Check user has access to workspace
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-    
-    if not user_workspace:
-        # Bypass for demo/testing
-        pass # raise HTTPException(status_code=403, detail="Access denied to this workspace")
-    
-    # Generate request ID
-    request_id = f"OTP{uuid.uuid4().hex[:12].upper()}"
-    
-    # Store OTP request (with mock OTP for demo)
-    otp_requests_db[request_id] = {
-        "request_id": request_id,
-        "workspace_id": workspace_id,
-        "gstin": gstin,
-        "user_id": user_id,
-        "requested_at": datetime.utcnow().isoformat(),
-        "expires_at": (datetime.utcnow() + timedelta(minutes=5)).isoformat(),
-        "verified": False
-    }
-    
-    logger.info(f"OTP generated for GSTIN {gstin} in workspace {workspace_id} by user {user_id}")
-    
-    return {
-        "success": True,
-        "message": "OTP sent to registered mobile number/email",
-        "otp_request_id": request_id,
-        "expires_in": 300  # 5 minutes
-    }
-
-
-@app.post("/api/gstin/verify-otp", tags=["GSTIN Authentication"])
-async def verify_gstin_otp(
-    workspace_id: str = Body(..., embed=True),
-    gstin: str = Body(..., embed=True),
-    otp: str = Body(..., embed=True),
-    otp_request_id: str = Body(..., embed=True),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Verify OTP and connect GSTIN to workspace.
-    
-    This endpoint verifies the OTP and establishes the connection between
-    the GSTIN and the workspace for GSTR-1 filing.
-    """
-    user_id = current_user.get("sub")
-    
-    # Get stored OTP request
-    otp_request = otp_requests_db.get(otp_request_id)
-    
-    if not otp_request:
-        return {
-            "success": False,
-            "message": "Invalid OTP request. Please generate OTP first."
-        }
-    
-    # Check if OTP expired
-    if datetime.utcnow() > datetime.fromisoformat(otp_request["expires_at"]):
-        del otp_requests_db[otp_request_id]
-        return {
-            "success": False,
-            "message": "OTP expired. Please generate a new OTP."
-        }
-    
-    # Verify GSTIN matches
-    if otp_request.get("gstin") != gstin:
-        return {
-            "success": False,
-            "message": "GSTIN mismatch. Please use the same GSTIN for verification."
-        }
-    
-    # Verify OTP (mock: accept any 6-digit OTP)
-    if len(otp) != 6 or not otp.isdigit():
-        return {
-            "success": False,
-            "message": "Invalid OTP. Please enter a valid 6-digit OTP."
-        }
-    
-    # Mark as verified
-    otp_requests_db[otp_request_id]["verified"] = True
-    
-    logger.info(f"OTP verified for GSTIN {gstin} in workspace {workspace_id}")
-    
-    return {
-        "success": True,
-        "message": "GSTIN connected successfully",
-        "gstin": gstin,
-        "connection_status": "active"
-    }
-
-
-@app.get("/api/gstin/status", tags=["GSTIN Authentication"])
-async def get_gstin_connection_status(
-    workspace_id: str = Query(...),
-    gstin: str = Query(...),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Get GSTIN connection status for a workspace.
-    """
-    user_id = current_user.get("sub")
-    
-    # Check user has access
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    # Check if GSTIN exists in database
-    gstin_record = next((g for g in gstins_db if g.get("gstin_number") == gstin), None)
-    
-    if not gstin_record:
-        return {
-            "connected": False,
-            "gstin": gstin,
-            "status": "not_found"
-        }
-    
-    return {
-        "connected": True,
-        "gstin": gstin,
-        "status": gstin_record.get("status", "active"),
-        "business_id": gstin_record.get("business_id")
-    }
-
-
-# ============ SUPPORT CHAT API ============
-
-@app.get("/api/support/conversations", tags=["Support Chat"])
-async def list_support_conversations(
-    workspace_id: Optional[str] = Query(None),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    List support conversations.
-    """
-    user_id = current_user.get("sub")
-    
-    conversations = support_conversations_db
-    
-    if workspace_id:
-        # Check user has access to workspace
-        user_workspace = next((uw for uw in user_workspaces_db 
-            if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-        
-        if not user_workspace:
-            raise HTTPException(status_code=403, detail="Access denied to this workspace")
-        
-        conversations = [c for c in conversations if c.get("workspace_id") == workspace_id]
-    
-    # Also filter by user_id for non-admin
-    if current_user.get("role") != "admin":
-        conversations = [c for c in conversations if c.get("user_id") == user_id]
-    
-    return {
-        "loading": False,
-        "data": conversations,
-        "total": len(conversations)
-    }
-
-
-@app.post("/api/support/conversations", tags=["Support Chat"])
-async def create_support_conversation(
-    workspace_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Create a new support conversation.
-    """
-    user_id = current_user.get("sub")
-    
-    # Check user has access to workspace
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Access denied to this workspace")
-    
-    # Create conversation
-    new_conversation = {
-        "id": generate_id(),
-        "workspace_id": workspace_id,
-        "user_id": user_id,
-        "status": "open",
-        "created_at": datetime.utcnow().isoformat() + "Z"
-    }
-    support_conversations_db.append(new_conversation)
-    
-    return {
-        "loading": False,
-        "data": new_conversation
-    }
-
-
-@app.get("/api/support/conversations/{conversation_id}/messages", tags=["Support Chat"])
-async def get_support_messages(
-    conversation_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Get messages for a support conversation.
-    """
-    user_id = current_user.get("sub")
-    
-    # Check conversation exists
-    conversation = next((c for c in support_conversations_db if c.get("id") == conversation_id), None)
-    
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Check access
-    if current_user.get("role") != "admin" and conversation.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    messages = [m for m in support_messages_db if m.get("conversation_id") == conversation_id]
-    
-    return {
-        "loading": False,
-        "data": messages,
-        "total": len(messages)
-    }
-
-
-@app.post("/api/support/conversations/{conversation_id}/messages", tags=["Support Chat"])
-async def send_support_message(
-    conversation_id: str,
-    message: SupportMessageCreate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Send a message in a support conversation.
-    """
-    user_id = current_user.get("sub")
-    
-    # Check conversation exists
-    conversation = next((c for c in support_conversations_db if c.get("id") == conversation_id), None)
-    
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Check access
-    if current_user.get("role") != "admin" and conversation.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    # Determine role (user or support/admin)
-    role = "support" if current_user.get("role") == "admin" else "user"
-    
-    # Create message
-    new_message = {
-        "id": generate_id(),
-        "conversation_id": conversation_id,
-        "role": role,
-        "content": message.content,
-        "created_at": datetime.utcnow().isoformat() + "Z"
-    }
-    support_messages_db.append(new_message)
-    
-    return {
-        "loading": False,
-        "data": new_message
-    }
-
-
-@app.post("/api/support/conversations/{conversation_id}/close", tags=["Support Chat"])
-async def close_support_conversation(
-    conversation_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """
-    Close a support conversation.
-    """
-    for i, conversation in enumerate(support_conversations_db):
-        if conversation.get("id") == conversation_id:
-            support_conversations_db[i]["status"] = "closed"
-            support_conversations_db[i]["closed_at"] = datetime.utcnow().isoformat() + "Z"
-            
-            return {
-                "loading": False,
-                "data": support_conversations_db[i]
-            }
-    
-    raise HTTPException(status_code=404, detail="Conversation not found")
-
-
-# ============ SETTINGS API ============
-
-# --- Business Settings ---
-@app.get("/api/settings/businesses", tags=["Settings"])
-async def get_business_settings(
-    workspace_id: Optional[str] = Query(None),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Get all businesses (for settings page)."""
-    user_id = current_user.get("sub")
-    
-    businesses = businesses_db
-    if workspace_id:
-        businesses = [b for b in businesses if b.get("workspace_id") == workspace_id]
-    
-    return {
-        "loading": False,
-        "data": businesses,
-        "total": len(businesses)
-    }
-
-
-@app.post("/api/settings/businesses", tags=["Settings"])
-async def create_business_settings(
-    workspace_id: str,
-    business: BusinessCreate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Create a business (settings page)."""
-    return await create_business(workspace_id, business, current_user)
-
-
-@app.patch("/api/settings/businesses/{business_id}", tags=["Settings"])
-async def update_business_settings(
-    business_id: str,
-    business_update: BusinessUpdate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Update a business (settings page)."""
-    return await update_business(business_id, business_update, current_user)
-
-
-@app.delete("/api/settings/businesses/{business_id}", tags=["Settings"])
-async def delete_business_settings(
-    business_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Delete a business (settings page)."""
-    return await delete_business(business_id, current_user)
-
-
-# --- User Settings (Workspace Members) ---
-@app.get("/api/settings/users", tags=["Settings"])
-async def get_workspace_users(
-    workspace_id: str = Query(...),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Get all users in a workspace."""
-    # Get user workspaces for this workspace
-    user_workspaces = [uw for uw in user_workspaces_db if uw.get("workspace_id") == workspace_id]
-    
-    users = []
-    for uw in user_workspaces:
-        user = next((u for u in users_db if u.get("username") == uw.get("user_id")), None)
-        if user:
-            users.append({
-                "id": user.get("id"),
-                "username": user.get("username"),
-                "email": user.get("email"),
-                "full_name": user.get("full_name"),
-                "role": uw.get("role"),
-                "created_at": uw.get("created_at")
-            })
-    
-    return {
-        "loading": False,
-        "data": users,
-        "total": len(users)
-    }
-
-
-@app.post("/api/settings/users/invite", tags=["Settings"])
-async def invite_workspace_user(
-    workspace_id: str,
-    invite: UserInvite,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Invite a user to a workspace."""
-    # Check current user is admin
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == current_user.get("sub")
-        and uw.get("role") == "admin"), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Only admins can invite users")
-    
-    # Check if user exists in database
-    existing_user = next((u for u in users_db if u.get("email") == invite.email), None)
-    
-    if not existing_user:
-        raise HTTPException(status_code=404, detail="User not found. User must register first.")
-    
-    # Check if already a member
-    existing_member = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == existing_user.get("username")), None)
-    
-    if existing_member:
-        raise HTTPException(status_code=400, detail="User is already a member of this workspace")
-    
-    # Add user to workspace
-    user_workspace = {
-        "id": generate_id(),
-        "user_id": existing_user.get("username"),
-        "workspace_id": workspace_id,
-        "role": invite.role
-    }
-    user_workspaces_db.append(user_workspace)
-    
-    return {
-        "loading": False,
-        "message": f"User {invite.email} invited successfully",
-        "data": user_workspace
-    }
-
-
-@app.patch("/api/settings/users/{user_id}/role", tags=["Settings"])
-async def update_user_role(
-    workspace_id: str,
-    user_id: str,
-    role: str = Body(..., embed=True),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Update a user's role in a workspace."""
-    # Check current user is admin
-    current_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == current_user.get("sub")
-        and uw.get("role") == "admin"), None)
-    
-    if not current_workspace:
-        raise HTTPException(status_code=403, detail="Only admins can change roles")
-    
-    # Update role
-    for uw in user_workspaces_db:
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id:
-            uw["role"] = role
-            return {
-                "loading": False,
-                "message": "Role updated successfully",
-                "data": uw
-            }
-    
-    raise HTTPException(status_code=404, detail="User not found in workspace")
-
-
-@app.delete("/api/settings/users/{user_id}", tags=["Settings"])
-async def remove_workspace_user(
-    workspace_id: str,
-    user_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Remove a user from a workspace."""
-    # Check current user is admin
-    current_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == current_user.get("sub")
-        and uw.get("role") == "admin"), None)
-    
-    if not current_workspace:
-        raise HTTPException(status_code=403, detail="Only admins can remove users")
-    
-    # Remove user
-    user_workspaces_db[:] = [uw for uw in user_workspaces_db 
-        if not (uw.get("workspace_id") == workspace_id and uw.get("user_id") == user_id)]
-    
-    return {
-        "loading": False,
-        "message": "User removed from workspace"
-    }
-
-
-@app.delete("/api/settings/gstin-credentials/{credential_id}", tags=["Settings"])
-async def delete_gstin_credentials(
-    credential_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Delete GSTIN credentials."""
-    gstin_credentials_db[:] = [c for c in gstin_credentials_db if c.get("id") != credential_id]
-    
-    return {
-        "loading": False,
-        "message": "Credential deleted"
-    }
-
-
-# --- Workspace Settings ---
-@app.get("/api/settings/workspace", tags=["Settings"])
-async def get_workspace_settings(
-    workspace_id: str = Query(...),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Get workspace settings."""
-    return await get_workspace(workspace_id, current_user)
-
-
-@app.put("/api/settings/workspace", tags=["Settings"])
-async def update_workspace_settings(
-    workspace_id: str,
-    workspace_update: WorkspaceUpdate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Update workspace settings."""
-    return await update_workspace(workspace_id, workspace_update, current_user)
-
-
-# --- Security Settings ---
-@app.get("/api/settings/security", tags=["Settings"])
-async def get_security_settings(
-    workspace_id: str = Query(...),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Get security settings."""
-    # Get workspace
-    workspace = next((w for w in workspaces_db if w.get("id") == workspace_id), None)
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
-    return {
-        "loading": False,
-        "data": {
-            "two_factor_enabled": workspace.get("settings", {}).get("two_factor_enabled", False),
-            "session_timeout": workspace.get("settings", {}).get("session_timeout", 60),
-            "ip_whitelist": workspace.get("settings", {}).get("ip_whitelist", [])
-        }
-    }
-
-
-@app.post("/api/settings/security", tags=["Settings"])
-async def update_security_settings(
-    workspace_id: str,
-    security_settings: Dict[str, Any],
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Update security settings."""
-    # Check user is admin
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == current_user.get("sub")
-        and uw.get("role") == "admin"), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Only admins can update security settings")
-    
-    # Update workspace settings
-    for i, workspace in enumerate(workspaces_db):
-        if workspace.get("id") == workspace_id:
-            current_settings = workspace.get("settings", {})
-            current_settings.update(security_settings)
-            workspaces_db[i]["settings"] = current_settings
-            
-            return {
-                "loading": False,
-                "message": "Security settings updated",
-                "data": workspaces_db[i]["settings"]
-            }
-    
-    raise HTTPException(status_code=404, detail="Workspace not found")
-
-
-# --- GSTIN Credentials Settings ---
-@app.get("/api/settings/gstin-credentials", tags=["Settings"])
-async def get_gstin_credentials(
-    workspace_id: Optional[str] = Query(None),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Get GSTIN credentials."""
-    credentials = gstin_credentials_db
-    
-    if workspace_id:
-        credentials = [c for c in credentials if c.get("workspace_id") == workspace_id]
-    
-    # Hide passwords
-    for c in credentials:
-        c["password"] = "****"""
-    
-    return {
-        "loading": False,
-        "data": credentials,
-        "total": len(credentials)
-    }
-
-
-@app.post("/api/settings/gstin-credentials", tags=["Settings"])
-async def create_gstin_credentials(
-    workspace_id: str,
-    credential: GSTINCredentialCreate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Create GSTIN credentials."""
-    # Check user is admin
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == current_user.get("sub")
-        and uw.get("role") == "admin"), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Only admins can manage credentials")
-    
-    new_credential = {
-        "id": generate_id(),
-        "workspace_id": workspace_id,
-        "gstin": credential.gstin,
-        "username": credential.username,
-        "password": credential.password,
-        "env_key": credential.env_key,
-        "created_at": datetime.utcnow().isoformat() + "Z"
-    }
-    gstin_credentials_db.append(new_credential)
-    
-    # Return without password
-    new_credential["password"] = "****"
-    
-    return {
-        "loading": False,
-        "data": new_credential
-    }
-
-
-@app.patch("/api/settings/gstin-credentials/{credential_id}", tags=["Settings"])
-async def update_gstin_credentials(
-    credential_id: str,
-    credential_update: Dict[str, Any],
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Update GSTIN credentials."""
-    for i, cred in enumerate(gstin_credentials_db):
-        if cred.get("id") == credential_id:
-            if credential_update.get("username"):
-                gstin_credentials_db[i]["username"] = credential_update["username"]
-            if credential_update.get("password"):
-                gstin_credentials_db[i]["password"] = credential_update["password"]
-            if credential_update.get("env_key"):
-                gstin_credentials_db[i]["env_key"] = credential_update["env_key"]
-            
-            gstin_credentials_db[i]["password"] = "****"
-            return {
-                "loading": False,
-                "data": gstin_credentials_db[i]
-            }
-    
-    raise HTTPException(status_code=404, detail="Credential not found")
-
-
-@app.delete("/api/settings/gstin-credentials/{credential_id}", tags=["Settings"])
-async def delete_gstin_credentials(
-    credential_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Delete GSTIN credentials."""
-    global gstin_credentials_db
-    gstin_credentials_db = [c for c in gstin_credentials_db if c.get("id") != credential_id]
-    
-    return {
-        "loading": False,
-        "message": "Credential deleted"
-    }
-
-
-# --- Subscriptions Settings ---
-@app.get("/api/settings/subscriptions", tags=["Settings"])
-async def get_subscriptions(
-    workspace_id: Optional[str] = Query(None),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Get subscriptions."""
-    subscriptions = subscriptions_db
-    
-    if workspace_id:
-        subscriptions = [s for s in subscriptions if s.get("workspace_id") == workspace_id]
-    
-    return {
-        "loading": False,
-        "data": subscriptions,
-        "total": len(subscriptions)
-    }
-
-
-# --- Email Configuration Settings ---
-@app.get("/api/settings/email-configuration", tags=["Settings"])
-async def get_email_configuration(
-    workspace_id: Optional[str] = Query(None),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Get email configuration."""
-    configs = email_configurations_db
-    
-    if workspace_id:
-        configs = [c for c in configs if c.get("workspace_id") == workspace_id]
-    
-    # Hide passwords
-    for c in configs:
-        c["smtp_password"] = "****"
-    
-    return {
-        "loading": False,
-        "data": configs,
-        "total": len(configs)
-    }
-
-
-@app.post("/api/settings/email-configuration", tags=["Settings"])
-async def create_email_configuration(
-    workspace_id: str,
-    config: EmailConfigurationCreate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Create email configuration."""
-    # Check user is admin
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == current_user.get("sub")
-        and uw.get("role") == "admin"), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Only admins can manage email settings")
-    
-    new_config = {
-        "id": generate_id(),
-        "workspace_id": workspace_id,
-        "smtp_host": config.smtp_host,
-        "smtp_port": config.smtp_port,
-        "smtp_user": config.smtp_user,
-        "smtp_password": config.smtp_password,
-        "from_email": config.from_email,
-        "from_name": config.from_name,
-        "use_tls": config.use_tls,
-        "created_at": datetime.utcnow().isoformat() + "Z"
-    }
-    email_configurations_db.append(new_config)
-    
-    new_config["smtp_password"] = "****"
-    
-    return {
-        "loading": False,
-        "data": new_config
-    }
-
-
-# --- DSC Settings ---
-@app.get("/api/settings/dsc", tags=["Settings"])
-async def get_dsc_list(
-    workspace_id: Optional[str] = Query(None),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Get DSC list."""
-    dsc_list = dsc_db
-    
-    if workspace_id:
-        dsc_list = [d for d in dsc_list if d.get("workspace_id") == workspace_id]
-    
-    # Hide sensitive data
-    for d in dsc_list:
-        d["dsc_file"] = "****"
-        d["dsc_password"] = "****"
-    
-    return {
-        "loading": False,
-        "data": dsc_list,
-        "total": len(dsc_list)
-    }
-
-
-@app.post("/api/settings/dsc", tags=["Settings"])
-async def create_dsc(
-    workspace_id: str,
-    dsc: DSCCreate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Add DSC."""
-    # Check user is admin
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == current_user.get("sub")
-        and uw.get("role") == "admin"), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Only admins can manage DSC")
-    
-    new_dsc = {
-        "id": generate_id(),
-        "workspace_id": workspace_id,
-        "name": dsc.name,
-        "dsc_file": dsc.dsc_file,
-        "dsc_password": dsc.dsc_password,
-        "certificate_serial": dsc.certificate_serial,
-        "created_at": datetime.utcnow().isoformat() + "Z"
-    }
-    dsc_db.append(new_dsc)
-    
-    new_dsc["dsc_file"] = "****"
-    new_dsc["dsc_password"] = "****"
-    
-    return {
-        "loading": False,
-        "data": new_dsc
-    }
-
-
-# --- Integrations Settings ---
-@app.get("/api/settings/integrations", tags=["Settings"])
-async def get_integrations(
-    workspace_id: Optional[str] = Query(None),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Get integrations."""
-    integration_list = integrations_db
-    
-    if workspace_id:
-        integration_list = [i for i in integration_list if i.get("workspace_id") == workspace_id]
-    
-    return {
-        "loading": False,
-        "data": integration_list,
-        "total": len(integration_list)
-    }
-
-
-@app.post("/api/settings/integrations/{integration_id}/connect", tags=["Settings"])
-async def connect_integration(
-    integration_id: str,
-    connection_data: Dict[str, Any],
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Connect an integration."""
-    for i, integration in enumerate(integrations_db):
-        if integration.get("id") == integration_id:
-            integrations_db[i]["status"] = "connected"
-            integrations_db[i]["connected_at"] = datetime.utcnow().isoformat() + "Z"
-            integrations_db[i]["connection_data"] = connection_data
-            
-            return {
-                "loading": False,
-                "message": "Integration connected",
-                "data": integrations_db[i]
-            }
-    
-    raise HTTPException(status_code=404, detail="Integration not found")
-
-
-# --- API Clients Settings ---
-@app.get("/api/settings/api-clients", tags=["Settings"])
-async def get_api_clients(
-    workspace_id: Optional[str] = Query(None),
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Get API clients."""
-    clients = api_clients_db
-    
-    if workspace_id:
-        clients = [c for c in clients if c.get("workspace_id") == workspace_id]
-    
-    # Hide secrets
-    for c in clients:
-        c["client_secret"] = "****"
-    
-    return {
-        "loading": False,
-        "data": clients,
-        "total": len(clients)
-    }
-
-
-@app.post("/api/settings/api-clients", tags=["Settings"])
-async def create_api_client(
-    workspace_id: str,
-    client: APIClientCreate,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Create API client."""
-    # Check user is admin
-    user_workspace = next((uw for uw in user_workspaces_db 
-        if uw.get("workspace_id") == workspace_id and uw.get("user_id") == current_user.get("sub")
-        and uw.get("role") == "admin"), None)
-    
-    if not user_workspace:
-        raise HTTPException(status_code=403, detail="Only admins can manage API clients")
-    
-    new_client = {
-        "id": generate_id(),
-        "workspace_id": workspace_id,
-        "name": client.name,
-        "client_id": client.client_id,
-        "client_secret": client.client_secret,
-        "permissions": client.permissions,
-        "created_at": datetime.utcnow().isoformat() + "Z"
-    }
-    api_clients_db.append(new_client)
-    
-    new_client["client_secret"] = "****"
-    
-    return {
-        "loading": False,
-        "data": new_client
-    }
-
-
-@app.delete("/api/settings/api-clients/{client_id}", tags=["Settings"])
-async def delete_api_client(
-    client_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Delete API client."""
-    api_clients_db[:] = [c for c in api_clients_db if c.get("id") != client_id]
-    
-    return {
-        "loading": False,
-        "message": "API client deleted"
-    }
-
-
-# ============ HEALTH AND INFO ENDPOINTS ============
-
-
-# ============ HEALTH AND INFO ENDPOINTS ============
-@app.get("/")
-async def root():
-    """Root endpoint - API welcome message."""
-    return {
-        "message": "Welcome to GSTR-1 Excel Processor API",
-        "version": "1.1.0",
-        "docs": "/docs",
-        "login": "/login"
-    }
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint for container orchestration."""
-    return {"status": "healthy"}
-
-
-@app.get("/ping")
-async def ping():
-    """
-    Simple ping endpoint for health checks and load balancer probes.
-    
-    Returns a minimal response for quick health verification.
-    """
-    return {"ping": "pong", "timestamp": datetime.utcnow().isoformat() + "Z"}
-
-
-# ============ File Cleanup ============
-async def cleanup_temp_file(filepath: str):
-    """Delete temporary file after processing."""
-    try:
-        if os.path.exists(filepath):
-            os.remove(filepath)
-            logger.info(f"Cleaned up temporary file: {filepath}")
-    except Exception as e:
-        logger.warning(f"Failed to cleanup file {filepath}: {str(e)}")
-
-
-# ============ Main Endpoints ============
-@app.post("/upload-sales-excel")
-async def upload_excel(
-    file: UploadFile = File(...),
-    client_host: str = "127.0.0.1",
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user)
-) -> Dict[str, Any]:
-    """
-    Upload and process a sales Excel file for GSTR-1 generation.
-    
-    Supports both API key and JWT authentication.
-    """
-    username = current_user["sub"] if current_user else "anonymous"
-    logger.info(f"File upload request from {username}: {file.filename}")
-    
-    # Audit log
-    audit_logger.log("file_upload", username, {
-        "filename": file.filename,
-        "ip_address": client_host
-    })
-    
-    # Initialize response structure
-    response = {
-        "summary": {},
-        "errors": [],
-    }
-    
-    # Validate file type
-    if not file.filename.endswith(('.xlsx', '.xls')):
-        response["errors"].append({
-            "row": 0,
-            "error": f"Invalid file type: {file.filename}. Please upload an Excel file (.xlsx or .xls)"
-        })
-        audit_logger.log("upload_failed", username, {
-            "filename": file.filename,
-            "reason": "Invalid file type",
-            "ip_address": client_host
-        })
-        return JSONResponse(status_code=400, content=response)
-    
-    # Create temp file for cleanup
-    temp_filepath = None
-    
-    # Read file content
-    try:
-        content = await file.read()
-        logger.info(f"Read file content: {len(content)} bytes")
-        
-        if not content:
-            response["errors"].append({
-                "row": 0,
-                "error": "Empty file uploaded"
-            })
-            audit_logger.log("upload_failed", username, {
-                "filename": file.filename,
-                "reason": "Empty file",
-                "ip_address": client_host
-            })
-            return JSONResponse(status_code=400, content=response)
-        
-        # Save temp file for cleanup
-        temp_filepath = f"/tmp/{file.filename}_{int(time.time())}"
-        with open(temp_filepath, "wb") as f:
-            f.write(content)
-        
-        # Process the Excel file
-        logger.info("Starting GSTR-1 Excel processing")
-        result = process_gstr1_excel(content)
-        logger.info("GSTR-1 Excel processing completed")
-        
-        # Get validation summary
-        validation_summary = result.get("validation_summary", {})
-        errors = validation_summary.get("errors", [])
-        warnings = validation_summary.get("warnings", [])
-        
-        error_count = len(errors)
-        logger.info(f"Validation completed: {error_count} errors, {len(warnings)} warnings")
-        
-        # Convert errors to simplified format
-        simplified_errors = []
-        for err in errors:
-            simplified_errors.append({
-                "row": err.get("row", 0),
-                "error": f"{err.get('field', 'Field')}: {err.get('message', 'Validation error')}"
-            })
-        
-        simplified_errors.sort(key=lambda x: x["row"])
-        
-        # Build summary from processed data
-        summary = {
-            "b2b_count": len(result.get("b2b", [])),
-            "b2cl_count": len(result.get("b2cl", [])),
-            "b2cs_count": len(result.get("b2cs", [])),
-            "export_count": len(result.get("export", [])),
-            "total_invoices": result.get("summary", {}).get("total_invoices", 0),
-            "total_taxable_value": result.get("summary", {}).get("total_taxable_value", 0),
-            "total_igst": result.get("summary", {}).get("total_igst", 0),
-            "total_cgst": result.get("summary", {}).get("total_cgst", 0),
-            "total_sgst": result.get("summary", {}).get("total_sgst", 0),
-            "total_cess": result.get("summary", {}).get("total_cess", 0),
-        }
-        
-        # Add GSTR-3B summary if available
-        try:
-            from india_compliance.gst_india.utils.gstr3b.gstr3b_data import generate_gstr3b_summary
-            gstr3b_summary = generate_gstr3b_summary(result, "")
-            summary["gstr3b"] = gstr3b_summary
-        except Exception as e:
-            logger.warning(f"Could not generate GSTR-3B summary: {str(e)}")
-        
-        # Build final response
-        response = {
-            "summary": summary,
-            "errors": simplified_errors,
-        }
-        
-        if warnings:
-            response["warnings"] = warnings
-        
-        # Return appropriate status based on error count
-        if simplified_errors:
-            audit_logger.log("upload_completed_with_errors", username, {
-                "filename": file.filename,
-                "errors_count": error_count,
-                "ip_address": client_host
-            })
-            return JSONResponse(status_code=400, content=response)
-        
-        # Success
-        response["message"] = "Excel processed successfully"
-        audit_logger.log("upload_success", username, {
-            "filename": file.filename,
-            "invoices": summary["total_invoices"],
-            "ip_address": client_host
-        })
-        return response
-        
-    except Exception as e:
-        logger.exception(f"Error processing file: {str(e)}")
-        response["errors"].append({
-            "row": 0,
-            "error": f"Processing error: {str(e)}"
-        })
-        audit_logger.log("upload_error", username, {
-            "filename": file.filename,
-            "error": str(e),
-            "ip_address": client_host
-        })
-        return JSONResponse(status_code=500, content=response)
-    
-    finally:
-        # Cleanup temp file
-        if temp_filepath:
-            await cleanup_temp_file(temp_filepath)
-
-
-@app.post("/upload-gstr1-excel")
-async def upload_gstr1_excel(file: UploadFile = File(...), current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-    """Upload GSTR-1 Excel template file (alias for upload-sales-excel)."""
-    return await upload_excel(file, current_user=current_user)
-
-
-# ============ NEW API ENDPOINTS FOR FRONTEND INTEGRATION ============
-
-# ============ GST Announcements API ============
-
-@app.get("/gst-announcements")
-async def get_gst_announcements(
-    limit: int = 10,
-    category: Optional[str] = None
-):
-    """
-    Get GST announcements from official GST portal.
-    
-    Scrapes the GST portal to fetch latest announcements, advisories, and updates.
-    Returns real-time data with correct announcement links.
-    """
-    try:
-        import requests
-        from bs4 import BeautifulSoup
-        
-        GST_BASE_URL = "https://www.gst.gov.in"
-        GST_ANNOUNCEMENTS_URL = "https://www.gst.gov.in/newsandupdates"
-        
-        # Try to fetch from GST portal
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-        }
-        
-        response = requests.get(GST_ANNOUNCEMENTS_URL, headers=headers, timeout=15)
-        
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            announcements = []
-            
-            # Try multiple selectors to find announcement links
-            selectors = [
-                '.news-listing a',
-                '.news-item a',
-                '.announcement-item a',
-                '.list-group-item a',
-                '.card a[href*="news"]',
-                'a[href*="newsandupdates/read"]',
-                'a[href*="/read/"]',
-            ]
-            
-            links_found = set()
-            
-            for selector in selectors:
-                links = soup.select(selector)
-                for link in links:
-                    href = link.get('href', '')
-                    title = link.get_text(strip=True)
-                    
-                    # Skip if no valid href or title
-                    if not href or not title or len(title) < 5:
-                        continue
-                    
-                    # Skip navigation and social links
-                    if any(x in href.lower() for x in ['facebook', 'twitter', 'instagram', 'youtube', 'linkedin', 'sitemap', 'contact']):
-                        continue
-                    
-                    # Construct full URL
-                    if href.startswith('/'):
-                        full_url = GST_BASE_URL + href
-                    elif href.startswith('http'):
-                        full_url = href
-                    else:
-                        full_url = GST_BASE_URL + '/' + href
-                    
-                    # Skip if already found
-                    if full_url in links_found:
-                        continue
-                    
-                    # Only include announcement-type links
-                    if (
-                        'news' in href.lower()
-                        or 'read' in href.lower()
-                        or re.search(r"/\d", href)
-                    ):
-                        links_found.add(full_url)
-                        announcements.append({
-                            "id": str(len(announcements) + 1),
-                            "title": title,
-                            "date": "",  # Will be sorted by position
-                            "link": full_url,
-                            "description": "",
-                            "category": "announcement"
-                        })
-            
-            # If we found announcements, use them
-            if announcements:
-                # Remove duplicates
-                seen = set()
-                unique_announcements = []
-                for ann in announcements:
-                    if ann['link'] not in seen:
-                        seen.add(ann['link'])
-                        unique_announcements.append(ann)
-                
-                announcements = unique_announcements[:limit]
-                
-                return {
-                    "success": True,
-                    "data": announcements,
-                    "total": len(announcements)
-                }
-        
-        # Fallback: If scraping fails, return curated announcements with proper links
-        # These are real announcement URLs from gst.gov.in
-        announcements = [
-            {
-                "id": "1",
-                "title": "Facility for Withdrawal from Rule 14A",
-                "date": "2026-03-05",
-                "link": "https://www.gst.gov.in/newsandupdates/read/650",
-                "description": "New facility introduced for withdrawal from provisions of Rule 14A under CGST Rules",
-                "category": "compliance"
-            },
-            {
-                "id": "2",
-                "title": "Advisory on Interest Collection in GSTR-3B",
-                "date": "2026-03-03",
-                "link": "https://www.gst.gov.in/newsandupdates/read/649",
-                "description": "Important update regarding interest collection mechanism in GSTR-3B filing",
-                "category": "filing"
-            },
-            {
-                "id": "3",
-                "title": "GST Revenue Collections for February 2026",
-                "date": "2026-02-28",
-                "link": "https://www.gst.gov.in/newsandupdates/read/648",
-                "description": "Latest GST revenue collection figures show robust compliance",
-                "category": "revenue"
-            },
-            {
-                "id": "4",
-                "title": "Extension of GSTR-1 Filing Due Date for Certain Categories",
-                "date": "2026-02-25",
-                "link": "https://www.gst.gov.in/newsandupdates/read/647",
-                "description": "Due date extended for GSTR-1 filing for certain categories of taxpayers",
-                "category": "filing"
-            },
-            {
-                "id": "5",
-                "title": "New Features Rolled Out on GST Portal",
-                "date": "2026-02-20",
-                "link": "https://www.gst.gov.in/newsandupdates/read/646",
-                "description": "New features rolled out on the GST portal for better compliance management",
-                "category": "portal"
-            },
-            {
-                "id": "6",
-                "title": "E-Way Bill System Enhancements",
-                "date": "2026-02-15",
-                "link": "https://www.gst.gov.in/newsandupdates/read/645",
-                "description": "System enhancements for e-way bill generation and validation",
-                "category": "ewaybill"
-            },
-            {
-                "id": "7",
-                "title": "Advisory on Input Tax Credit Reconciliation",
-                "date": "2026-02-10",
-                "link": "https://www.gst.gov.in/newsandupdates/read/644",
-                "description": "Guidelines for ITC reconciliation between GSTR-3B and GSTR-2B",
-                "category": "itc"
-            },
-            {
-                "id": "8",
-                "title": "GSTN Portal Maintenance Schedule",
-                "date": "2026-02-05",
-                "link": "https://www.gst.gov.in/newsandupdates/read/643",
-                "description": "Scheduled maintenance window for GSTN portal services",
-                "category": "portal"
-            },
-            {
-                "id": "9",
-                "title": "Annual Return Filing Guidelines for FY 2025-26",
-                "date": "2026-01-30",
-                "link": "https://www.gst.gov.in/newsandupdates/read/642",
-                "description": "Detailed guidelines for filing GSTR-9 and GSTR-9C for FY 2025-26",
-                "category": "filing"
-            },
-            {
-                "id": "10",
-                "title": "Special Drive for Fake Invoice Detection",
-                "date": "2026-01-25",
-                "link": "https://www.gst.gov.in/newsandupdates/read/641",
-                "description": "Special compliance drive to detect and penalize fake invoice generation",
-                "category": "compliance"
-            }
-        ]
-        
-        # Filter by category if provided
-        if category:
-            announcements = [a for a in announcements if a.get("category") == category]
-        
-        # Apply limit
-        announcements = announcements[:limit]
-        
-        return {
-            "success": True,
-            "data": announcements,
-            "total": len(announcements)
-        }
-        
-    except ImportError:
-        # If requests or bs4 not available, return fallback data
-        announcements = [
-            {
-                "id": "1",
-                "title": "Facility for Withdrawal from Rule 14A",
-                "date": "2026-03-05",
-                "link": "https://www.gst.gov.in/newsandupdates/read/650",
-                "description": "New facility introduced for withdrawal from provisions of Rule 14A under CGST Rules",
-                "category": "compliance"
-            },
-            {
-                "id": "2",
-                "title": "Advisory on Interest Collection in GSTR-3B",
-                "date": "2026-03-03",
-                "link": "https://www.gst.gov.in/newsandupdates/read/649",
-                "description": "Important update regarding interest collection mechanism in GSTR-3B filing",
-                "category": "filing"
-            },
-            {
-                "id": "3",
-                "title": "GST Revenue Collections for February 2026",
-                "date": "2026-02-28",
-                "link": "https://www.gst.gov.in/newsandupdates/read/648",
-                "description": "Latest GST revenue collection figures show robust compliance",
-                "category": "revenue"
-            },
-            {
-                "id": "4",
-                "title": "Extension of GSTR-1 Filing Due Date for Certain Categories",
-                "date": "2026-02-25",
-                "link": "https://www.gst.gov.in/newsandupdates/read/647",
-                "description": "Due date extended for GSTR-1 filing for certain categories of taxpayers",
-                "category": "filing"
-            },
-            {
-                "id": "5",
-                "title": "New Features Rolled Out on GST Portal",
-                "date": "2026-02-20",
-                "link": "https://www.gst.gov.in/newsandupdates/read/646",
-                "description": "New features rolled out on the GST portal for better compliance management",
-                "category": "portal"
-            }
-        ]
-        announcements = announcements[:limit]
-        return {
-            "success": True,
-            "data": announcements,
-            "total": len(announcements)
-        }
-        
-    except Exception as e:
-        logger.exception(f"Error fetching GST announcements: {str(e)}")
-        return {
-            "success": False,
-            "error": str(e),
-            "data": []
-        }
-
-
-# ============ GSTR Filing APIs ============
 
 @app.post("/generate-gstr1")
 async def generate_gstr1(
@@ -2737,12 +799,14 @@ async def get_columns(
         raise HTTPException(status_code=500, detail=f"Failed to extract columns: {str(e)}")
 
 
-@app.post("/api/gstr1/process")
+@app.post("/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr1/process")
 async def process_gstr1(
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
     file: UploadFile = File(...),
     mapping: str = Form(...),
-    company_gstin: str = Form(""),
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ):
     """
     Process Excel file for GSTR-1 generation with full engine pipeline.
@@ -2800,6 +864,7 @@ async def process_gstr1(
             
             # Step 3: Run full GSTR1Engine pipeline
             print("\nRunning GSTR1Engine pipeline...")
+            company_gstin = business.gstin
             engine = GSTR1Engine(company_gstin=company_gstin or "")
             gstr1_data = engine.run_from_dataframe(df)
             
@@ -3058,12 +1123,13 @@ def _get_filing_provider_for_gstin(gstin: str, current_user: Optional[Dict[str, 
     return GSPProvider.MOCK
 
 
-@app.get("/api/gstr1/state")
+@app.get("/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr1/state")
 async def get_gstr1_state(
-    workspace_id: str,
-    gstin: str,
-    return_period: str,
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
+    return_period: str = Query(...),
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ):
     """
     Get saved GSTR-1 workflow state
@@ -3076,7 +1142,8 @@ async def get_gstr1_state(
     Returns saved workflow state if exists, otherwise 404.
     """
     try:
-        state_key = get_state_key(workspace_id, gstin, return_period)
+        gstin = business.gstin
+        state_key = get_state_key(str(workspace_id), gstin, return_period)
         
         if state_key in gstr1_workflow_states:
             state = gstr1_workflow_states[state_key]
@@ -3099,10 +1166,13 @@ async def get_gstr1_state(
         }
 
 
-@app.post("/api/gstr1/state")
+@app.post("/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr1/state")
 async def save_gstr1_state(
-    request_body: Dict[str, Any],
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
+    request_body: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ):
     """
     Save GSTR-1 workflow state
@@ -3126,17 +1196,16 @@ async def save_gstr1_state(
     }
     """
     try:
-        workspace_id = str(request_body.get("workspace_id") or "").strip()
-        gstin = str(request_body.get("gstin") or "").strip()
+        gstin = business.gstin
         return_period = str(request_body.get("return_period") or "").strip()
         
-        if not all([workspace_id, gstin, return_period]):
+        if not return_period:
             return {
                 "success": False,
-                "error": "Missing required fields: workspace_id, gstin, return_period"
+                "error": "Missing required field: return_period"
             }
         
-        state_key = get_state_key(workspace_id, gstin, return_period)
+        state_key = get_state_key(str(workspace_id), gstin, return_period)
 
         existing_state = gstr1_workflow_states.get(state_key, {})
         gstr1_tables = request_body.get("gstr1_tables") or _extract_gstr1_tables(request_body)
@@ -3771,10 +1840,14 @@ async def export_gstr3b(data: dict):
 
 # ============ NEW GSTR-3B PROCESS ENDPOINT ============
 
-@app.post("/api/gstr3b/process")
+@app.post("/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr3b/process")
 async def process_gstr3b(
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
     gstr1_tables: str = Form(...),
-    purchases_file: UploadFile = File(None)
+    purchases_file: UploadFile = File(None),
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ):
     """
     Process GSTR-3B data with ITC reconciliation.
@@ -4712,12 +2785,14 @@ async def export_errors_csv(
 # Valid Indian state codes for Place of Supply validation
 VALID_STATE_CODES = [str(i).zfill(2) for i in range(1, 38)]  # 01 to 37
 
-@app.post("/api/gstr1/validate", tags=["GSTR1 Validation"])
+@app.post("/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr1/validate", tags=["GSTR1 Validation"])
 async def validate_gstr1_file(
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
     file: UploadFile = File(...),
     mapping: str = Form(...),
-    company_gstin: str = Form(""),
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ):
     """
     Validate GSTR-1 data from uploaded Excel file.
@@ -7391,19 +5466,23 @@ async def compute_gstr3b(
         saved = False
         if request.auto_save and request.workspace_id:
             try:
-                from india_compliance.gst_india.workspace.gstr3b_state_store import save_gstr3b_state
-                save_gstr3b_state(
-                    workspace_id=request.workspace_id,
-                    gstin=request.gstin,
-                    return_period=request.ret_period,
-                    state={
-                        "currentStep": "review",
-                        "status": "computed",
-                        "nil_return": request.nil_return,
-                        "gstr3b_data": computed_data,
-                        "computation": computation,
-                    }
-                )
+                state_key = get_gstr3b_state_key(request.workspace_id, request.gstin, request.ret_period)
+                state_data = {
+                    "workspace_id": request.workspace_id,
+                    "gstin": request.gstin,
+                    "return_period": request.ret_period,
+                    "current_step": "review",
+                    "status": "computed",
+                    "nil_return": request.nil_return,
+                    "gstr3b_data": computed_data,
+                    "computation": computation,
+                    "updated_at": datetime.utcnow().isoformat() + "Z"
+                }
+                if state_key in gstr3b_workflow_states:
+                    state_data["created_at"] = gstr3b_workflow_states[state_key].get("created_at")
+                else:
+                    state_data["created_at"] = state_data["updated_at"]
+                gstr3b_workflow_states[state_key] = state_data
                 saved = True
             except Exception as save_err:
                 logger.warning(f"Auto-save failed (non-critical): {save_err}")
@@ -7424,54 +5503,75 @@ async def compute_gstr3b(
         raise HTTPException(status_code=500, detail=f"Computation failed: {str(e)}")
 
 
-@app.post("/api/gstr3b/save-draft", tags=["GSTR-3B"])
+@app.post("/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr3b/save-draft", tags=["GSTR-3B"])
 async def save_gstr3b_draft(
-    request: GSTR3BSaveDraftRequest,
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
+    request: GSTR3BSaveDraftRequest = Body(...),
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ):
     """
     Save GSTR-3B draft state to workspace.
     Stores GSTIN, period, computed data, override flags, nil_return flag, and status.
     """
     try:
-        # Attempt to use workspace state store
-        try:
-            from india_compliance.gst_india.workspace.gstr3b_state_store import save_gstr3b_state
-            save_gstr3b_state(
-                workspace_id=request.workspace_id,
-                gstin=request.gstin,
-                return_period=request.ret_period,
-                state={
-                    "currentStep": "review",
-                    "status": request.status,
-                    "nil_return": request.nil_return,
-                    "gstr3b_data": request.computed_data,
-                    "override_flags": request.override_flags or {},
-                },
-            )
-        except ImportError:
-            # Fallback: use existing gstr3b_state endpoint logic
-            pass
-
-        return {
-            "success": True,
-            "message": f"GSTR-3B draft saved for {request.gstin} / {request.ret_period}",
-            "gstin": request.gstin,
-            "ret_period": request.ret_period,
+        gstin = business.gstin
+        ret_period = request.ret_period
+        
+        # Save to database
+        draft = db.query(GSTR3B_Draft).filter(
+            GSTR3B_Draft.business_id == business.id,
+            GSTR3B_Draft.return_period == ret_period
+        ).first()
+        
+        payload = {
             "status": request.status,
             "nil_return": request.nil_return,
-            "saved_at": datetime.utcnow().isoformat() + "Z",
+            "gstr3b_data": request.computed_data,
+            "override_flags": request.override_flags or {},
+            "metadata": {
+                "gstin": gstin,
+                "return_period": ret_period,
+                "taxpayer_name": business.legal_name
+            }
+        }
+        
+        if draft:
+            draft.payload = payload
+        else:
+            draft = GSTR3B_Draft(
+                business_id=business.id,
+                return_period=ret_period,
+                payload=payload
+            )
+            db.add(draft)
+        
+        db.commit()
+        
+        # Fallback to internal workflow state for UI session tracking
+        state_key = get_gstr3b_state_key(str(workspace_id), gstin, ret_period)
+        state_data = {
+            "workspace_id": str(workspace_id),
+            "gstin": gstin,
+            "return_period": ret_period,
+            "current_step": "review",
+            "status": request.status,
+            "nil_return": request.nil_return,
+            "gstr3b_data": request.computed_data,
+            "override_flags": request.override_flags or {},
+            "updated_at": datetime.utcnow().isoformat() + "Z"
+        }
+        gstr3b_workflow_states[state_key] = state_data
+        
+        return {
+            "success": True,
+            "message": "Draft saved successfully",
+            "id": state_key
         }
     except Exception as e:
-        logger.error(f"GSTR-3B save draft error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Save draft failed: {str(e)}")
-
-
-@app.post("/api/gstr3b/confirm-section", tags=["GSTR-3B"])
-async def confirm_gstr3b_section(
-    request: GSTR3BConfirmSectionRequest,
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
-):
+        logger.warning(f"Draft save failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save draft: {str(e)}")
     """
     Lock a GSTR-3B section after user confirmation.
     Once confirmed, editing requires an explicit reset call.
@@ -7543,8 +5643,8 @@ async def get_gstr3b_section_state(
 
         if workspace_id:
             try:
-                from india_compliance.gst_india.workspace.gstr3b_state_store import get_gstr3b_state
-                state = get_gstr3b_state(workspace_id, gstin, ret_period)
+                state_key = get_gstr3b_state_key(workspace_id, gstin, ret_period)
+                state = gstr3b_workflow_states.get(state_key)
                 if state:
                     data.update(state.get("gstr3b_data", {}))
                     nil_return = state.get("nil_return", nil_return)

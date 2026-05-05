@@ -269,18 +269,18 @@ export interface GSTR3BExportRequest {
 // API Helper Functions
 // ============================================
 
-async function getAuthHeaders(): Promise<HeadersInit> {
+export async function getAuthHeaders(): Promise<HeadersInit> {
   // Get JWT token from localStorage (set by FastAPI login)
   const token = localStorage.getItem('gst_access_token');
-  
+
   const headers: HeadersInit = {
     // 'Content-Type': 'multipart/form-data' is handled automatically for FormData
   };
-  
+
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  
+
   return headers;
 }
 
@@ -289,13 +289,13 @@ async function handleResponse<T>(response: Response): Promise<T> {
     const errorData = await response.json().catch(() => ({}));
     throw new Error(errorData.detail || errorData.message || `HTTP Error: ${response.status}`);
   }
-  
+
   // Check if response is a file download
   const contentType = response.headers.get('content-type');
   if (contentType?.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
     return response.blob() as unknown as T;
   }
-  
+
   return response.json();
 }
 
@@ -313,13 +313,13 @@ export async function uploadSalesExcel(
 ): Promise<BackendUploadResponse> {
   const formData = new FormData();
   formData.append('file', file);
-  
+
   const response = await fetch(`${API_BASE_URL}/upload-sales-excel`, {
     method: 'POST',
     headers: await getAuthHeaders(),
     body: formData,
   });
-  
+
   return handleResponse<BackendUploadResponse>(response);
 }
 
@@ -332,13 +332,13 @@ export async function uploadGSTR1Excel(
 ): Promise<BackendUploadResponse> {
   const formData = new FormData();
   formData.append('file', file);
-  
+
   const response = await fetch(`${API_BASE_URL}/upload-gstr1-excel`, {
     method: 'POST',
     headers: await getAuthHeaders(),
     body: formData,
   });
-  
+
   return handleResponse<BackendUploadResponse>(response);
 }
 
@@ -357,7 +357,7 @@ export async function exportGSTR1Excel(
     },
     body: JSON.stringify(request),
   });
-  
+
   return handleResponse<Blob>(response);
 }
 
@@ -376,7 +376,7 @@ export async function exportGSTR3BExcel(
     },
     body: JSON.stringify(request),
   });
-  
+
   return handleResponse<Blob>(response);
 }
 
@@ -389,7 +389,7 @@ export async function downloadGSTR1Template(): Promise<Blob> {
     method: 'GET',
     headers: await getAuthHeaders(),
   });
-  
+
   return handleResponse<Blob>(response);
 }
 
@@ -409,7 +409,7 @@ export async function login(username: string, password: string): Promise<{
     },
     body: JSON.stringify({ username, password }),
   });
-  
+
   return handleResponse(response);
 }
 
@@ -426,7 +426,7 @@ export async function getCurrentUser(): Promise<{
     method: 'GET',
     headers: await getAuthHeaders(),
   });
-  
+
   return handleResponse(response);
 }
 
@@ -445,7 +445,7 @@ export async function exportErrorsCSV(
     },
     body: JSON.stringify({ errors }),
   });
-  
+
   return handleResponse<Blob>(response);
 }
 
@@ -503,6 +503,55 @@ export async function checkBackendHealth(): Promise<boolean> {
 export async function pingBackend(): Promise<{ ping: string; timestamp: string }> {
   const response = await fetch(`${API_BASE_URL}/ping`, {
     method: 'GET',
+  });
+  return handleResponse(response);
+}
+
+// ============================================
+// Tenant & Multi-Tenancy API Functions
+// ============================================
+
+export async function fetchWorkspaces(): Promise<any[]> {
+  const response = await fetch(`${API_BASE_URL}/api/workspaces`, {
+    method: 'GET',
+    headers: await getAuthHeaders(),
+  });
+  return handleResponse(response);
+}
+
+export async function createWorkspace(name: string): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/workspaces`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...await getAuthHeaders(),
+    },
+    body: JSON.stringify({ name }),
+  });
+  return handleResponse(response);
+}
+
+export async function fetchBusinesses(workspaceId: string): Promise<any[]> {
+  const response = await fetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/businesses`, {
+    method: 'GET',
+    headers: await getAuthHeaders(),
+  });
+  return handleResponse(response);
+}
+
+export async function createBusiness(workspaceId: string, data: {
+  legal_name: string;
+  trade_name?: string;
+  gstin: string;
+  pan?: string;
+}): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/businesses`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...await getAuthHeaders(),
+    },
+    body: JSON.stringify(data),
   });
   return handleResponse(response);
 }
@@ -593,7 +642,7 @@ export async function processGSTR1Excel(
   const formData = new FormData();
   formData.append('file', file);
   formData.append('mapping', JSON.stringify(mapping));
-  
+
   // Add workspace context for multi-tenant support
   if (workspaceId) {
     formData.append('workspace_id', workspaceId);
@@ -615,68 +664,68 @@ export async function processGSTR1Excel(
     return await handleResponse<GSTR1ProcessResponse>(response);
   } catch (error: any) {
     if (error instanceof TypeError && error.message.includes('fetch')) {
-       console.log("[Mock Fallback] Backend offline, returning realistic mock GSTR-1 data.");
-       return {
-         success: true,
-         message: "Backend offline. Mock data returned successfully.",
-         data: {
-            summary: {
-              total_taxable_value: 500000,
-              total_igst: 45000,
-              total_cgst: 22500,
-              total_sgst: 22500,
-              total_cess: 0,
-              total_invoices: 3,
-              b2b_count: 2,
-              b2cl_count: 1,
-              b2cs_count: 0,
-              exp_count: 0,
-              cdnr_count: 0,
+      console.log("[Mock Fallback] Backend offline, returning realistic mock GSTR-1 data.");
+      return {
+        success: true,
+        message: "Backend offline. Mock data returned successfully.",
+        data: {
+          summary: {
+            total_taxable_value: 500000,
+            total_igst: 45000,
+            total_cgst: 22500,
+            total_sgst: 22500,
+            total_cess: 0,
+            total_invoices: 3,
+            b2b_count: 2,
+            b2cl_count: 1,
+            b2cs_count: 0,
+            exp_count: 0,
+            cdnr_count: 0,
+          },
+          b2b: [
+            {
+              invoice_no: 'INV-1001',
+              invoice_date: '10-04-2026',
+              invoice_value: 118000,
+              place_of_supply: '07-Delhi',
+              reverse_charge: false,
+              invoice_type: 'Regular',
+              ecommerce_gstin: '',
+              customer: { gstin: '07AADCB1626P1ZJ', name: 'Bauer Engineering India' },
+              items: [{ taxable_value: 100000, igst_amount: 0, cgst_amount: 9000, sgst_amount: 9000, cess_amount: 0, tax_rate: 18 }]
             },
-            b2b: [
-              {
-                invoice_no: 'INV-1001',
-                invoice_date: '10-04-2026',
-                invoice_value: 118000,
-                place_of_supply: '07-Delhi',
-                reverse_charge: false,
-                invoice_type: 'Regular',
-                ecommerce_gstin: '',
-                customer: { gstin: '07AADCB1626P1ZJ', name: 'Bauer Engineering India' },
-                items: [{ taxable_value: 100000, igst_amount: 0, cgst_amount: 9000, sgst_amount: 9000, cess_amount: 0, tax_rate: 18 }]
-              },
-              {
-                invoice_no: 'INV-1002',
-                invoice_date: '12-04-2026',
-                invoice_value: 236000,
-                place_of_supply: '27-Maharashtra',
-                reverse_charge: false,
-                invoice_type: 'Regular',
-                ecommerce_gstin: '',
-                customer: { gstin: '27AAAAA0000A1Z5', name: 'Test Corp Ltd' },
-                items: [{ taxable_value: 200000, igst_amount: 36000, cgst_amount: 0, sgst_amount: 0, cess_amount: 0, tax_rate: 18 }]
-              }
-            ],
-            b2cl: [
-              {
-                invoice_no: 'INV-1003',
-                invoice_date: '15-04-2026',
-                invoice_value: 250000,
-                place_of_supply: '29-Karnataka',
-                invoice_type: 'Regular',
-                ecommerce_gstin: '',
-                items: [{ taxable_value: 200000, igst_amount: 50000, cgst_amount: 0, sgst_amount: 0, cess_amount: 0, tax_rate: 25 }]
-              }
-            ],
-            b2cs: [],
-            exp: [],
-            cdnr: [],
-            cdnur: [],
-            hsn: []
-         },
-         validation_report: { errors: [], warnings: ["Offline mode active. No cloud validations performed."], final_status: "valid" },
-         total_records: 3
-       };
+            {
+              invoice_no: 'INV-1002',
+              invoice_date: '12-04-2026',
+              invoice_value: 236000,
+              place_of_supply: '27-Maharashtra',
+              reverse_charge: false,
+              invoice_type: 'Regular',
+              ecommerce_gstin: '',
+              customer: { gstin: '27AAAAA0000A1Z5', name: 'Test Corp Ltd' },
+              items: [{ taxable_value: 200000, igst_amount: 36000, cgst_amount: 0, sgst_amount: 0, cess_amount: 0, tax_rate: 18 }]
+            }
+          ],
+          b2cl: [
+            {
+              invoice_no: 'INV-1003',
+              invoice_date: '15-04-2026',
+              invoice_value: 250000,
+              place_of_supply: '29-Karnataka',
+              invoice_type: 'Regular',
+              ecommerce_gstin: '',
+              items: [{ taxable_value: 200000, igst_amount: 50000, cgst_amount: 0, sgst_amount: 0, cess_amount: 0, tax_rate: 25 }]
+            }
+          ],
+          b2cs: [],
+          exp: [],
+          cdnr: [],
+          cdnur: [],
+          hsn: []
+        },
+        validation_report: { errors: [], warnings: ["Offline mode active. No cloud validations performed."], final_status: "valid" },
+        total_records: 3
+      };
     }
     throw error;
   }
@@ -815,8 +864,8 @@ export async function processGSTR3B(
 ): Promise<GSTR3BProcessResponse> {
   const formData = new FormData();
   // Wrap gstr1_tables in {gstr1_tables: {...}} format for backend compatibility
-  formData.append('gstr1_tables', JSON.stringify({gstr1_tables}));
-  
+  formData.append('gstr1_tables', JSON.stringify({ gstr1_tables }));
+
   if (purchasesFile) {
     formData.append('purchases_file', purchasesFile);
   }
@@ -1133,7 +1182,7 @@ export async function getInvoices(
   const params = new URLSearchParams();
   if (invoiceType) params.append('invoice_type', invoiceType);
   if (search) params.append('search', search);
-  
+
   const queryString = params.toString();
   const response = await fetch(`${API_BASE_URL}/invoices${queryString ? '?' + queryString : ''}`, {
     method: 'GET',
@@ -1193,7 +1242,7 @@ export async function uploadInvoices(
   const formData = new FormData();
   formData.append('file', file);
   formData.append('invoice_type', invoiceType);
-  
+
   const response = await fetch(`${API_BASE_URL}/upload-invoices`, {
     method: 'POST',
     headers: await getAuthHeaders(),
@@ -1231,7 +1280,7 @@ export async function calculateGSTR3B(
   const formData = new FormData();
   formData.append('return_period', returnPeriod);
   formData.append('taxpayer_gstin', taxpayerGstin);
-  
+
   const response = await fetch(`${API_BASE_URL}/calculate-gstr3b`, {
     method: 'POST',
     headers: await getAuthHeaders(),
@@ -1359,7 +1408,7 @@ export async function getReturns(
   if (gstin) params.append('gstin', gstin);
   if (returnType) params.append('return_type', returnType);
   if (status) params.append('status', status);
-  
+
   const queryString = params.toString();
   const response = await fetch(`${API_BASE_URL}/returns${queryString ? '?' + queryString : ''}`, {
     method: 'GET',
@@ -1433,7 +1482,7 @@ export async function getNotifications(
   const params = new URLSearchParams();
   if (userId) params.append('user_id', userId);
   if (unreadOnly) params.append('unread_only', 'true');
-  
+
   const queryString = params.toString();
   const response = await fetch(`${API_BASE_URL}/notifications${queryString ? '?' + queryString : ''}`, {
     method: 'GET',
@@ -1559,7 +1608,7 @@ export async function getGSTNSyncLogs(
   const params = new URLSearchParams();
   if (gstin) params.append('gstin', gstin);
   params.append('limit', limit.toString());
-  
+
   const response = await fetch(`${API_BASE_URL}/sync-gstn/logs?${params}`, {
     method: 'GET',
     headers: await getAuthHeaders(),
@@ -1752,7 +1801,7 @@ export async function validateGSTR1File(
   const formData = new FormData();
   formData.append('file', file);
   formData.append('mapping', JSON.stringify(mapping));
-  
+
   if (companyGstin) {
     formData.append('company_gstin', companyGstin);
   }
@@ -1826,7 +1875,7 @@ export async function getB2BInvoices(
   if (search) {
     params.append('search', search);
   }
-  
+
   const response = await fetch(`${API_BASE_URL}/api/gstr1/b2b?${params}`, {
     method: 'GET',
     headers: {
@@ -1854,7 +1903,7 @@ export async function getB2CSInvoices(
   if (search) {
     params.append('search', search);
   }
-  
+
   const response = await fetch(`${API_BASE_URL}/api/gstr1/b2cs?${params}`, {
     method: 'GET',
     headers: {
@@ -1882,7 +1931,7 @@ export async function getCDNRInvoices(
   if (search) {
     params.append('search', search);
   }
-  
+
   const response = await fetch(`${API_BASE_URL}/api/gstr1/cdnr?${params}`, {
     method: 'GET',
     headers: {
@@ -1925,7 +1974,7 @@ export async function getHSNSummary(
   if (search) {
     params.append('search', search);
   }
-  
+
   const response = await fetch(`${API_BASE_URL}/api/gstr1/hsn?${params}`, {
     method: 'GET',
     headers: {
@@ -1970,7 +2019,7 @@ export async function computeGSTR3B(
     gstin,
     return_period: returnPeriod,
   });
-  
+
   const response = await fetch(`${API_BASE_URL}/api/gstr3b/compute?${params}`, {
     method: 'GET',
     headers: await getAuthHeaders(),
@@ -2361,24 +2410,6 @@ export async function getWorkspace(workspaceId: string): Promise<WorkspaceDetail
   return handleResponse<WorkspaceDetails>(response);
 }
 
-/**
- * Create a new workspace
- * POST /api/workspaces
- */
-export async function createWorkspace(
-  userId: string,
-  data: CreateWorkspaceRequest
-): Promise<Workspace> {
-  const response = await fetch(`${API_BASE_URL}/api/workspaces?user_id=${encodeURIComponent(userId)}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...await getAuthHeaders(),
-    },
-    body: JSON.stringify(data),
-  });
-  return handleResponse<Workspace>(response);
-}
 
 /**
  * Update a workspace
@@ -2638,14 +2669,14 @@ export async function getGstr1State(
 
     return await handleResponse<GSTR1StateResponse>(response);
   } catch (error: any) {
-     if (error instanceof TypeError && error.message.includes('fetch')) {
-       return {
-         success: false,
-         message: "Backend unreachable, using local fallback",
-         data: null as any
-       };
-     }
-     throw error;
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      return {
+        success: false,
+        message: "Backend unreachable, using local fallback",
+        data: null as any
+      };
+    }
+    throw error;
   }
 }
 
@@ -3439,20 +3470,20 @@ export async function getBusinessesWithGstins(
     if (error instanceof TypeError && error.message.includes('fetch')) {
       console.log("[Mock Fallback] returning mock businesses since backend is offline.");
       return {
-         success: true,
-         data: [{
-            id: 'mock-biz-1',
-            name: "Virtual CA Demo Org",
-            pan: "XXXXX1234X",
-            gstins: [{
-               id: 'mock-gstin-1',
-               gstin: "29ABCDE1234F1Z5",
-               state: "29-KARNATAKA",
-               status: "Regular",
-               isConnected: true,
-               lastVerified: new Date().toISOString()
-            }]
-         }]
+        success: true,
+        data: [{
+          id: 'mock-biz-1',
+          name: "Virtual CA Demo Org",
+          pan: "XXXXX1234X",
+          gstins: [{
+            id: 'mock-gstin-1',
+            gstin: "29ABCDE1234F1Z5",
+            state: "29-KARNATAKA",
+            status: "Regular",
+            isConnected: true,
+            lastVerified: new Date().toISOString()
+          }]
+        }]
       };
     }
     throw error;

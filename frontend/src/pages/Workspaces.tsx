@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { getAuthHeaders } from '@/lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -179,7 +180,9 @@ export default function Workspaces() {
     
     try {
       setError(null);
-      const response = await fetch(`${API_BASE}/workspaces?user_id=${user.id}`);
+      const response = await fetch(`${API_BASE}/workspaces?user_id=${user.id}`, {
+        headers: await getAuthHeaders()
+      });
       
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -203,7 +206,9 @@ export default function Workspaces() {
 
   const fetchWorkspaceDetails = async (workspaceId: string) => {
     try {
-      const response = await fetch(`${API_BASE}/workspaces/${workspaceId}`);
+      const response = await fetch(`${API_BASE}/workspaces/${workspaceId}`, {
+        headers: await getAuthHeaders()
+      });
       if (response.ok) {
         const data = await response.json();
         setSelectedWorkspace(data);
@@ -215,7 +220,9 @@ export default function Workspaces() {
 
   const fetchMetrics = async (workspaceId: string) => {
     try {
-      const response = await fetch(`${API_BASE}/workspaces/${workspaceId}/consolidated/summary/${period}`);
+      const response = await fetch(`${API_BASE}/workspaces/${workspaceId}/consolidated/summary/${period}`, {
+        headers: await getAuthHeaders()
+      });
       if (response.ok) {
         const data = await response.json();
         setMetrics(data);
@@ -259,7 +266,10 @@ export default function Workspaces() {
     try {
       const response = await fetch(`${API_BASE}/workspaces?user_id=${user.id}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...await getAuthHeaders()
+        },
         body: JSON.stringify(newWorkspace)
       });
       
@@ -331,7 +341,10 @@ export default function Workspaces() {
     try {
       const response = await fetch(`${API_BASE}/workspaces/${selectedWorkspace.id}/gstins?user_id=${user.id}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...await getAuthHeaders()
+        },
         body: JSON.stringify(newGSTIN)
       });
       
@@ -398,7 +411,10 @@ export default function Workspaces() {
     try {
       const response = await fetch(`${API_BASE}/workspaces/${selectedWorkspace.id}/members?user_id=${user.id}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...await getAuthHeaders()
+        },
         body: JSON.stringify(newMember)
       });
       
@@ -446,7 +462,8 @@ export default function Workspaces() {
     
     try {
       const response = await fetch(`${API_BASE}/gstins/${gstinId}?user_id=${user.id}&workspace_id=${selectedWorkspace.id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: await getAuthHeaders()
       });
       
       if (response.ok) {
@@ -485,7 +502,8 @@ export default function Workspaces() {
     
     try {
       const response = await fetch(`${API_BASE}/workspaces/${selectedWorkspace.id}/members/${userId}?user_id=${user.id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: await getAuthHeaders()
       });
       
       if (response.ok) {
