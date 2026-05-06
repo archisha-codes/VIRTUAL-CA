@@ -7,11 +7,19 @@ Includes JWT authentication, rate limiting, and audit logging.
 """
 from india_compliance.gst_india.engine_core.engine import GSTR1Engine
 from india_compliance.gst_india.exporters.gstr1_excel import export_gstr1_excel
-# Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Security, Depends, Request, BackgroundTasks, Form, Query, Body
+# Database Imports
+from sqlalchemy.orm import Session
+from database import get_db
+from repository import save_gstr1_documents
+from routers import workspace_router, business_router
+from api.dependencies import get_current_user, verify_workspace_access, get_current_business
+from models.tenant_models import Business
+from uuid import UUID
+
+from fastapi import FastAPI, File, UploadFile, HTTPException, Security, Depends, Request, BackgroundTasks, Form, Query, Body, Path
 from fastapi.security import APIKeyHeader, APIKeyQuery, HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
@@ -55,9 +63,11 @@ JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "jwt-secret-key-change-in-prod
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
-# ============ DATABASE MODELS (In-Memory with proper structure) ============
+# Database models are now handled via SQLAlchemy in tenant_models.py
 
-# User Table
+# ============ Legacy in-memory user store (used by JWT auth in main.py) ============
+# The SQLAlchemy User model in tenant_models.py is used by the /api/workspaces routes.
+# This dict remains for the /login, /me, /register, and get_current_user endpoints.
 users_db: List[Dict[str, Any]] = [
     {
         "id": "1",
@@ -79,18 +89,6 @@ users_db: List[Dict[str, Any]] = [
     }
 ]
 
-# Workspace Table - Multi-tenant workspaces
-workspaces_db: List[Dict[str, Any]] = []
-
-# Business Table - Business entities under workspace
-businesses_db: List[Dict[str, Any]] = []
-
-# GSTIN Table - GSTIN registrations under business
-gstins_db: List[Dict[str, Any]] = []
-
-# UserWorkspace Table - User-Workspace associations
-user_workspaces_db: List[Dict[str, Any]] = []
-
 # Support Conversation Table
 support_conversations_db: List[Dict[str, Any]] = []
 
@@ -103,6 +101,55 @@ subscriptions_db: List[Dict[str, Any]] = []
 email_configurations_db: List[Dict[str, Any]] = []
 dsc_db: List[Dict[str, Any]] = []
 integrations_db: List[Dict[str, Any]] = []
+# In-memory databases
+workspaces_db: List[Dict[str, Any]] = [
+    {
+        "id": "demo-org-1774441060336",
+        "name": "Demo Organization",
+        "settings": {},
+        "created_at": datetime.utcnow().isoformat() + "Z"
+    }
+]
+
+user_workspaces_db: List[Dict[str, Any]] = [
+    {
+        "id": "1",
+        "user_id": "1",
+        "workspace_id": "demo-org-1774441060336",
+        "role": "admin",
+        "joined_at": datetime.utcnow().isoformat() + "Z"
+    },
+    {
+        "id": "2",
+        "user_id": "demo-user-1774441060336",
+        "workspace_id": "demo-org-1774441060336",
+        "role": "admin",
+        "joined_at": datetime.utcnow().isoformat() + "Z"
+    }
+]
+
+businesses_db: List[Dict[str, Any]] = [
+    {
+        "id": "demo-biz-1",
+        "workspace_id": "demo-org-1774441060336",
+        "name": "Bauer Engineering India Private Limited",
+        "pan": "ABCDE1234F",
+        "address": "Mumbai, India",
+        "created_at": datetime.utcnow().isoformat() + "Z"
+    }
+]
+
+gstins_db: List[Dict[str, Any]] = [
+    {
+        "id": "demo-gstin-1",
+        "business_id": "demo-biz-1",
+        "gstin_number": "29ABCDE1234F1Z5",
+        "status": "active",
+        "registration_date": "2023-01-01",
+        "created_at": datetime.utcnow().isoformat() + "Z"
+    }
+]
+
 api_clients_db: List[Dict[str, Any]] = []
 
 # Helper to generate IDs
@@ -425,10 +472,14 @@ app = FastAPI(
     version="1.1.0",
 )
 
+# Include new routers for multi-tenant architecture with /api prefix
+app.include_router(workspace_router.router, prefix="/api")
+app.include_router(business_router.router, prefix="/api")
+
 # Allow frontend connection (React)
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=".*",
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -2759,12 +2810,14 @@ async def get_columns(
         raise HTTPException(status_code=500, detail=f"Failed to extract columns: {str(e)}")
 
 
-@app.post("/api/gstr1/process")
+@app.post("/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr1/process")
 async def process_gstr1(
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
     file: UploadFile = File(...),
     mapping: str = Form(...),
-    company_gstin: str = Form(""),
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ):
     """
     Process Excel file for GSTR-1 generation with full engine pipeline.
@@ -2822,6 +2875,7 @@ async def process_gstr1(
             
             # Step 3: Run full GSTR1Engine pipeline
             print("\nRunning GSTR1Engine pipeline...")
+            company_gstin = business.gstin
             engine = GSTR1Engine(company_gstin=company_gstin or "")
             gstr1_data = engine.run_from_dataframe(df)
             
@@ -3080,12 +3134,13 @@ def _get_filing_provider_for_gstin(gstin: str, current_user: Optional[Dict[str, 
     return GSPProvider.MOCK
 
 
-@app.get("/api/gstr1/state")
+@app.get("/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr1/state")
 async def get_gstr1_state(
-    workspace_id: str,
-    gstin: str,
-    return_period: str,
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
+    return_period: str = Query(...),
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ):
     """
     Get saved GSTR-1 workflow state
@@ -3098,7 +3153,8 @@ async def get_gstr1_state(
     Returns saved workflow state if exists, otherwise 404.
     """
     try:
-        state_key = get_state_key(workspace_id, gstin, return_period)
+        gstin = business.gstin
+        state_key = get_state_key(str(workspace_id), gstin, return_period)
         
         if state_key in gstr1_workflow_states:
             state = gstr1_workflow_states[state_key]
@@ -3121,10 +3177,13 @@ async def get_gstr1_state(
         }
 
 
-@app.post("/api/gstr1/state")
+@app.post("/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr1/state")
 async def save_gstr1_state(
-    request_body: Dict[str, Any],
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
+    request_body: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ):
     """
     Save GSTR-1 workflow state
@@ -3148,17 +3207,16 @@ async def save_gstr1_state(
     }
     """
     try:
-        workspace_id = str(request_body.get("workspace_id") or "").strip()
-        gstin = str(request_body.get("gstin") or "").strip()
+        gstin = business.gstin
         return_period = str(request_body.get("return_period") or "").strip()
         
-        if not all([workspace_id, gstin, return_period]):
+        if not return_period:
             return {
                 "success": False,
-                "error": "Missing required fields: workspace_id, gstin, return_period"
+                "error": "Missing required field: return_period"
             }
         
-        state_key = get_state_key(workspace_id, gstin, return_period)
+        state_key = get_state_key(str(workspace_id), gstin, return_period)
 
         existing_state = gstr1_workflow_states.get(state_key, {})
         gstr1_tables = request_body.get("gstr1_tables") or _extract_gstr1_tables(request_body)
@@ -3793,10 +3851,14 @@ async def export_gstr3b(data: dict):
 
 # ============ NEW GSTR-3B PROCESS ENDPOINT ============
 
-@app.post("/api/gstr3b/process")
+@app.post("/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr3b/process")
 async def process_gstr3b(
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
     gstr1_tables: str = Form(...),
-    purchases_file: UploadFile = File(None)
+    purchases_file: UploadFile = File(None),
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ):
     """
     Process GSTR-3B data with ITC reconciliation.
@@ -4734,12 +4796,14 @@ async def export_errors_csv(
 # Valid Indian state codes for Place of Supply validation
 VALID_STATE_CODES = [str(i).zfill(2) for i in range(1, 38)]  # 01 to 37
 
-@app.post("/api/gstr1/validate", tags=["GSTR1 Validation"])
+@app.post("/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr1/validate", tags=["GSTR1 Validation"])
 async def validate_gstr1_file(
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
     file: UploadFile = File(...),
     mapping: str = Form(...),
-    company_gstin: str = Form(""),
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ):
     """
     Validate GSTR-1 data from uploaded Excel file.
@@ -7413,19 +7477,23 @@ async def compute_gstr3b(
         saved = False
         if request.auto_save and request.workspace_id:
             try:
-                from india_compliance.gst_india.workspace.gstr3b_state_store import save_gstr3b_state
-                save_gstr3b_state(
-                    workspace_id=request.workspace_id,
-                    gstin=request.gstin,
-                    return_period=request.ret_period,
-                    state={
-                        "currentStep": "review",
-                        "status": "computed",
-                        "nil_return": request.nil_return,
-                        "gstr3b_data": computed_data,
-                        "computation": computation,
-                    }
-                )
+                state_key = get_gstr3b_state_key(request.workspace_id, request.gstin, request.ret_period)
+                state_data = {
+                    "workspace_id": request.workspace_id,
+                    "gstin": request.gstin,
+                    "return_period": request.ret_period,
+                    "current_step": "review",
+                    "status": "computed",
+                    "nil_return": request.nil_return,
+                    "gstr3b_data": computed_data,
+                    "computation": computation,
+                    "updated_at": datetime.utcnow().isoformat() + "Z"
+                }
+                if state_key in gstr3b_workflow_states:
+                    state_data["created_at"] = gstr3b_workflow_states[state_key].get("created_at")
+                else:
+                    state_data["created_at"] = state_data["updated_at"]
+                gstr3b_workflow_states[state_key] = state_data
                 saved = True
             except Exception as save_err:
                 logger.warning(f"Auto-save failed (non-critical): {save_err}")
@@ -7446,54 +7514,75 @@ async def compute_gstr3b(
         raise HTTPException(status_code=500, detail=f"Computation failed: {str(e)}")
 
 
-@app.post("/api/gstr3b/save-draft", tags=["GSTR-3B"])
+@app.post("/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr3b/save-draft", tags=["GSTR-3B"])
 async def save_gstr3b_draft(
-    request: GSTR3BSaveDraftRequest,
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
+    request: GSTR3BSaveDraftRequest = Body(...),
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ):
     """
     Save GSTR-3B draft state to workspace.
     Stores GSTIN, period, computed data, override flags, nil_return flag, and status.
     """
     try:
-        # Attempt to use workspace state store
-        try:
-            from india_compliance.gst_india.workspace.gstr3b_state_store import save_gstr3b_state
-            save_gstr3b_state(
-                workspace_id=request.workspace_id,
-                gstin=request.gstin,
-                return_period=request.ret_period,
-                state={
-                    "currentStep": "review",
-                    "status": request.status,
-                    "nil_return": request.nil_return,
-                    "gstr3b_data": request.computed_data,
-                    "override_flags": request.override_flags or {},
-                },
-            )
-        except ImportError:
-            # Fallback: use existing gstr3b_state endpoint logic
-            pass
-
-        return {
-            "success": True,
-            "message": f"GSTR-3B draft saved for {request.gstin} / {request.ret_period}",
-            "gstin": request.gstin,
-            "ret_period": request.ret_period,
+        gstin = business.gstin
+        ret_period = request.ret_period
+        
+        # Save to database
+        draft = db.query(GSTR3B_Draft).filter(
+            GSTR3B_Draft.business_id == business.id,
+            GSTR3B_Draft.return_period == ret_period
+        ).first()
+        
+        payload = {
             "status": request.status,
             "nil_return": request.nil_return,
-            "saved_at": datetime.utcnow().isoformat() + "Z",
+            "gstr3b_data": request.computed_data,
+            "override_flags": request.override_flags or {},
+            "metadata": {
+                "gstin": gstin,
+                "return_period": ret_period,
+                "taxpayer_name": business.legal_name
+            }
+        }
+        
+        if draft:
+            draft.payload = payload
+        else:
+            draft = GSTR3B_Draft(
+                business_id=business.id,
+                return_period=ret_period,
+                payload=payload
+            )
+            db.add(draft)
+        
+        db.commit()
+        
+        # Fallback to internal workflow state for UI session tracking
+        state_key = get_gstr3b_state_key(str(workspace_id), gstin, ret_period)
+        state_data = {
+            "workspace_id": str(workspace_id),
+            "gstin": gstin,
+            "return_period": ret_period,
+            "current_step": "review",
+            "status": request.status,
+            "nil_return": request.nil_return,
+            "gstr3b_data": request.computed_data,
+            "override_flags": request.override_flags or {},
+            "updated_at": datetime.utcnow().isoformat() + "Z"
+        }
+        gstr3b_workflow_states[state_key] = state_data
+        
+        return {
+            "success": True,
+            "message": "Draft saved successfully",
+            "id": state_key
         }
     except Exception as e:
-        logger.error(f"GSTR-3B save draft error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Save draft failed: {str(e)}")
-
-
-@app.post("/api/gstr3b/confirm-section", tags=["GSTR-3B"])
-async def confirm_gstr3b_section(
-    request: GSTR3BConfirmSectionRequest,
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
-):
+        logger.warning(f"Draft save failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save draft: {str(e)}")
     """
     Lock a GSTR-3B section after user confirmation.
     Once confirmed, editing requires an explicit reset call.
@@ -7565,8 +7654,8 @@ async def get_gstr3b_section_state(
 
         if workspace_id:
             try:
-                from india_compliance.gst_india.workspace.gstr3b_state_store import get_gstr3b_state
-                state = get_gstr3b_state(workspace_id, gstin, ret_period)
+                state_key = get_gstr3b_state_key(workspace_id, gstin, ret_period)
+                state = gstr3b_workflow_states.get(state_key)
                 if state:
                     data.update(state.get("gstr3b_data", {}))
                     nil_return = state.get("nil_return", nil_return)

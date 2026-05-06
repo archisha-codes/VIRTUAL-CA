@@ -16,26 +16,24 @@ from datetime import datetime
 from decimal import Decimal
 import logging
 
-from india_compliance.gst_india.gstr3b_data import generate_gstr3b_summary
-from india_compliance.gst_india.utils.logger import get_logger
-from india_compliance.gst_india.api_layer.schemas import (
-    GSTR3BAutoPopulateResponse,
-    OutwardSupplies,
-    InterStateSupplies,
-    ITCDetails,
-    TaxSummary,
-    SupplyTable,
-    TaxAmount,
-    FilingStatusFlags,
     ComplianceMetadata,
 )
+
+# Database Imports
+from sqlalchemy.orm import Session
+from database import get_db
+from models.gst_models import GSTR3B_Draft
+from models.tenant_models import Business
+from api.dependencies import get_current_user, verify_workspace_access, get_current_business
+from india_compliance.gst_india.utils.gstr3b.gstr3b_data import generate_gstr3b_summary
+from india_compliance.gst_india.utils.logger import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
 
 # Create router
 router = APIRouter(
-    prefix="/api/v1/gstr3b",
+    prefix="/api/v1/workspaces/{workspace_id}/businesses/{business_id}/gstr3b",
     tags=["GSTR-3B"],
     responses={404: {"description": "Not found"}},
 )
@@ -334,7 +332,7 @@ def build_auto_populate_response(
 # ============================================================================
 
 @router.get(
-    "/auto-populate/{gstin}/{return_period}",
+    "/auto-populate/{return_period}",
     response_model=GSTR3BAutoPopulateResponse,
     summary="Auto-populate GSTR-3B from GSTR-1 and GSTR-2B",
     description="""
@@ -356,12 +354,13 @@ def build_auto_populate_response(
     tags=["Auto-Population"],
 )
 async def auto_populate_gstr3b(
-    gstin: str = Path(..., description="Taxpayer GSTIN"),
+    workspace_id: UUID = Path(..., description="Workspace ID"),
+    business_id: UUID = Path(..., description="Business ID"),
     return_period: str = Path(..., description="Return period in MMYYYY format"),
     gstr1_filed: bool = Query(False, description="GSTR-1 filing status"),
     gstr2b_generated: bool = Query(False, description="GSTR-2B generation status"),
-    gstr1_data: Optional[Dict[str, Any]] = None,
-    gstr2b_data: Optional[List[Dict[str, Any]]] = None,
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
 ) -> GSTR3BAutoPopulateResponse:
     """
     GET endpoint to auto-populate GSTR-3B return.
@@ -373,18 +372,12 @@ async def auto_populate_gstr3b(
     4. Decimal precision (2 places)
     """
     try:
+        gstin = business.gstin
         logger.info(
-            f"Requesting GSTR-3B auto-population for GSTIN: {gstin}, "
+            f"Requesting GSTR-3B auto-population for Business: {business.legal_name} ({gstin}), "
             f"Period: {return_period}, GSTR-1 Filed: {gstr1_filed}, "
             f"GSTR-2B Generated: {gstr2b_generated}"
         )
-        
-        # Validate GSTIN format
-        if not gstin or len(gstin) != 15:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid GSTIN format. GSTIN must be 15 characters."
-            )
         
         # Validate return period format (MMYYYY)
         if not return_period or len(return_period) != 6 or not return_period.isdigit():
@@ -393,24 +386,24 @@ async def auto_populate_gstr3b(
                 detail="Invalid return period format. Expected MMYYYY (e.g., 122025 for Dec 2025)."
             )
         
-        # Use provided data or default empty structures
-        if gstr1_data is None:
-            gstr1_data = {"b2b": [], "b2cl": [], "b2cs": [], "exp": [], "cdnr": [], "cdnur": []}
+        # 1. Check if a draft already exists in PostgreSQL
+        draft = db.query(GSTR3B_Draft).filter(
+            GSTR3B_Draft.business_id == business.id,
+            GSTR3B_Draft.return_period == return_period
+        ).first()
+
+        if draft:
+            logger.info(f"Returning saved GSTR-3B draft for business {business.id}/{return_period}")
+            return GSTR3BAutoPopulateResponse(**draft.payload)
+
+        # 2. If no draft, generate fresh data from database
+        logger.info(f"No draft found. Generating fresh GSTR-3B summary from DB for {gstin}/{return_period}")
         
-        # Separate invoices and credit notes
-        invoices, credit_notes = separate_invoices_and_credit_notes(gstr1_data)
-        logger.info(f"Separated invoices and credit notes for {return_period}")
-        
-        # Generate GSTR-3B summary
         gstr3b_summary = generate_gstr3b_summary(
-            gstr1_tables=invoices,  # Pass invoices only, credit notes tracked separately
-            return_period=return_period,
-            taxpayer_gstin=gstin,
-            taxpayer_name="",  # Can be fetched from database
-            gstr2b_data=gstr2b_data,
+            db=db,
+            business_id=business.id,
+            return_period=return_period
         )
-        
-        logger.info(f"Generated GSTR-3B summary for {gstin}/{return_period}")
         
         # Apply filing status flags
         modified_gstr3b = apply_filing_status_flags(
@@ -419,16 +412,19 @@ async def auto_populate_gstr3b(
             gstr2b_generated=gstr2b_generated,
         )
         
-        # Build and return Pydantic model response
+        # Build metadata for the response
+        modified_gstr3b["metadata"] = {
+            "gstin": gstin,
+            "return_period": return_period,
+            "taxpayer_name": business.legal_name,
+            "filing_mode": "auto_populated"
+        }
+        
+        # Build Pydantic model response
         response = build_auto_populate_response(
             modified_gstr3b,
             gstr1_filed=gstr1_filed,
             gstr2b_generated=gstr2b_generated,
-        )
-        
-        logger.info(
-            f"Successfully auto-populated GSTR-3B for {gstin}/{return_period}. "
-            f"Total payable: {response.tax_summary.total_payable}"
         )
         
         return response
@@ -437,7 +433,7 @@ async def auto_populate_gstr3b(
         raise
     except Exception as e:
         logger.error(
-            f"Error auto-populating GSTR-3B for {gstin}/{return_period}: {str(e)}",
+            f"Error auto-populating GSTR-3B for business {business.id}/{return_period}: {str(e)}",
             exc_info=True
         )
         raise HTTPException(
@@ -447,42 +443,54 @@ async def auto_populate_gstr3b(
 
 
 @router.post(
-    "/auto-populate",
-    response_model=GSTR3BAutoPopulateResponse,
-    summary="Auto-populate GSTR-3B with POST data",
-    tags=["Auto-Population"],
+    "/draft",
+    response_model=Dict[str, Any],
+    summary="Save GSTR-3B draft",
+    tags=["Draft"],
 )
-async def auto_populate_gstr3b_post(
-    gstin: str = Query(..., description="Taxpayer GSTIN"),
-    return_period: str = Query(..., description="Return period in MMYYYY format"),
-    gstr1_filed: bool = Query(False, description="GSTR-1 filing status"),
-    gstr2b_generated: bool = Query(False, description="GSTR-2B generation status"),
-    gstr1_data: Dict[str, Any] = ...,
-    gstr2b_data: Optional[List[Dict[str, Any]]] = None,
-) -> GSTR3BAutoPopulateResponse:
+async def save_gstr3b_draft(
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
+    payload: GSTR3BAutoPopulateResponse = Body(...),
+    db: Session = Depends(get_db),
+    business: Business = Depends(get_current_business)
+) -> Dict[str, Any]:
     """
-    POST endpoint to auto-populate GSTR-3B return with inline data.
+    Save or update GSTR-3B draft in PostgreSQL for a specific business.
+    """
+    return_period = payload.metadata.get("return_period")
     
-    Allows sending GSTR-1 and GSTR-2B data in request body for on-demand computation.
-    """
-    return await auto_populate_gstr3b(
-        gstin=gstin,
-        return_period=return_period,
-        gstr1_filed=gstr1_filed,
-        gstr2b_generated=gstr2b_generated,
-        gstr1_data=gstr1_data,
-        gstr2b_data=gstr2b_data,
-    )
+    draft = db.query(GSTR3B_Draft).filter(
+        GSTR3B_Draft.business_id == business.id,
+        GSTR3B_Draft.return_period == return_period
+    ).first()
+
+    if draft:
+        draft.payload = payload.model_dump()
+        logger.info(f"Updated existing GSTR-3B draft for business {business.id}/{return_period}")
+    else:
+        draft = GSTR3B_Draft(
+            business_id=business.id,
+            return_period=return_period,
+            payload=payload.model_dump()
+        )
+        db.add(draft)
+        logger.info(f"Created new GSTR-3B draft for business {business.id}/{return_period}")
+
+    db.commit()
+    return {"success": True, "message": "Draft saved successfully"}
 
 
 @router.get(
-    "/filing-status/{gstin}/{return_period}",
+    "/filing-status/{return_period}",
     summary="Get filing status for GSTR-3B auto-population",
     tags=["Status"],
 )
 async def get_filing_status(
-    gstin: str = Path(..., description="Taxpayer GSTIN"),
+    workspace_id: UUID = Path(...),
+    business_id: UUID = Path(...),
     return_period: str = Path(..., description="Return period in MMYYYY format"),
+    business: Business = Depends(get_current_business)
 ) -> Dict[str, Any]:
     """
     Get filing status flags indicating data availability for GSTR-3B auto-population.

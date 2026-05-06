@@ -127,7 +127,7 @@ export function useDashboardService() {
     
     // Try to fetch from backend API first
     try {
-      const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+      const API_BASE_URL = import.meta.env.VITE_API_URL || '';
       const token = localStorage.getItem('gst_access_token');
       const workspaceId = currentOrganization?.id;
       
@@ -240,7 +240,7 @@ export function useDashboardService() {
   const getAnnouncements = async (limit: number = 10): Promise<Announcement[]> => {
     // Try backend API first
     try {
-      const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+      const API_BASE_URL = import.meta.env.VITE_API_URL || '';
       const token = localStorage.getItem('gst_access_token');
       const response = await fetch(`${API_BASE_URL}/api/dashboard/announcements?limit=${limit}`, {
         method: 'GET',
@@ -297,7 +297,7 @@ export function useDashboardService() {
   // Get navigation items
   const getNavigation = async (): Promise<NavigationItem[]> => {
     try {
-      const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+      const API_BASE_URL = import.meta.env.VITE_API_URL || '';
       const workspaceId = currentOrganization?.id;
       
       const url = workspaceId 
@@ -333,7 +333,7 @@ export function useDashboardService() {
   // Get form modules
   const getForms = async (): Promise<FormModule[]> => {
     try {
-      const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+      const API_BASE_URL = import.meta.env.VITE_API_URL || '';
       const workspaceId = currentOrganization?.id;
       
       const token = localStorage.getItem('gst_access_token');
@@ -374,7 +374,7 @@ export function useDashboardService() {
   // Get form metadata
   const getFormMetadata = async (module: string): Promise<FormMetadata | null> => {
     try {
-      const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+      const API_BASE_URL = import.meta.env.VITE_API_URL || '';
       
       const token = localStorage.getItem('gst_access_token');
       const response = await fetch(`${API_BASE_URL}/api/forms/${module}/metadata`, {

@@ -1,6 +1,27 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: virtual-ca-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres_password}
+      - POSTGRES_DB=${POSTGRES_DB:-virtual_ca}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - virtual-ca-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-virtual_ca}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # FastAPI Backend
   backend:
     build:
@@ -38,7 +59,8 @@ services:
       - TEMP_DIR=/tmp
       
       # Database
-      - DATABASE_TYPE=sqlite
+      - DATABASE_TYPE=postgresql
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password}@db:5432/${POSTGRES_DB:-virtual_ca}
       
       # CORS
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
@@ -49,18 +71,13 @@ services:
       
       # Session
       - SESSION_SECRET_KEY=${SESSION_SECRET_KEY:-session-secret-change-in-production}
-      
-      # Redis (optional)
-      # - REDIS_URL=${REDIS_URL}
     volumes:
-      # Mount logs directory for persistence
       - ./backend/logs:/app/logs
-      
-      # Mount uploads directory for file persistence
       - ./backend/uploads:/tmp/uploads
-      
-      # Mount .env file if it exists
       - ./backend/.env:/app/.env:ro
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/ping"]
@@ -95,5 +112,6 @@ networks:
     driver: bridge
 
 volumes:
+  postgres_data:
   logs:
   uploads:

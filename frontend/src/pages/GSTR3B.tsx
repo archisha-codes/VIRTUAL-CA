@@ -59,6 +59,8 @@ import { useGSTR3BValidation } from '@/hooks/useGSTR3BValidation';
 import { useGSTR3BCompute, useGSTR3BFile, type GSTR3BComputation } from '@/hooks/useGSTR3BCompute';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { useTenantStore } from '@/store/tenantStore';
+
 
 // Step types
 type GSTR3BStep = 'fetch' | 'review' | 'review_tax' | 'upload_gstn' | 'compute' | 'summary' | 'export';
@@ -93,6 +95,7 @@ interface SummaryRow {
 export default function GSTR3BPage() {
   const { toast } = useToast();
   const { currentOrganization, currentGstProfile } = useAuth();
+  const { businesses, activeBusinessId } = useTenantStore();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -286,7 +289,7 @@ export default function GSTR3BPage() {
       // Try to fetch from backend API
       if (workspaceId && filters.gstin) {
         const response = await fetch(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/gstr3b/prepare?workspace_id=${workspaceId}&gstin=${filters.gstin}&return_period=${filters.returnPeriod}`,
+          `${import.meta.env.VITE_API_URL || ''}/api/gstr3b/prepare?workspace_id=${workspaceId}&gstin=${filters.gstin}&return_period=${filters.returnPeriod}`,
           {
             headers: {
               'Authorization': `Bearer ${localStorage.getItem('gst_access_token')}`
@@ -403,7 +406,7 @@ export default function GSTR3BPage() {
     try {
       // Call backend API for export
       const response = await fetch(
-        `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/gstr3b/export`,
+        `${import.meta.env.VITE_API_URL || ''}/api/gstr3b/export`,
         {
           method: 'POST',
           headers: {
@@ -553,7 +556,25 @@ export default function GSTR3BPage() {
     );
   }
   // Map backend data to table format
-  const mappedBusinesses = [
+  const mappedBusinesses = businesses.length > 0 
+    ? businesses.map(biz => ({
+        id: biz.id,
+        businessName: biz.legal_name,
+        gstins: [
+          {
+            id: biz.id + "-gstin",
+            gstin: biz.gstin,
+            state: biz.trade_name || "Regular",
+            totalLiability: biz.id === activeBusinessId ? (computation?.totalLiability?.total || 0) : 0,
+            outwardSupplies: biz.id === activeBusinessId ? (computation?.grossLiability?.total || 0) : 0,
+            inwardSuppliesRCM: 0,
+            outwardSupplies95: 0,
+            netAvailableITC: biz.id === activeBusinessId ? (computation?.netItc4c?.total || 0) : 0,
+            interestLateFees: biz.id === activeBusinessId ? ((computation?.interest?.interestAmount || 0) + (computation?.lateFee?.totalLateFee || 0)) : 0,
+          }
+        ]
+      }))
+    : [
     {
       id: "b1",
       businessName: currentOrganization?.name || "Selected Business",

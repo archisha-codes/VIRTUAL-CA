@@ -148,7 +148,7 @@ const generateReturnPeriods = (): ReturnPeriod[] => {
 
 export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initialDrawer = 'business', initialGstins = [], initialPeriod = '' }: GSTR1DrawerFlowProps) {
   const { toast } = useToast();
-  const { currentOrganization, gstProfiles, currentGstProfile } = useAuth();
+  const { currentOrganization, gstProfiles, currentGstProfile, isDemoMode } = useAuth();
   
   // State for business selector
   const [businesses, setBusinesses] = useState<BusinessEntity[]>([]);
@@ -224,6 +224,41 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
         setReturnPeriod(firstOpen.value);
       }
 
+      // Demo mode: use workspaces from localStorage
+      if (isDemoMode) {
+        try {
+          const demoWorkspacesStr = localStorage.getItem('demo_workspaces');
+          if (demoWorkspacesStr) {
+            const demoWorkspaces = JSON.parse(demoWorkspacesStr);
+            // Convert workspaces to businesses format
+            const businessesFromWorkspaces: BusinessEntity[] = demoWorkspaces.map((ws: any) => ({
+              id: ws.id,
+              name: ws.name,
+              pan: ws.pan || 'DEMOPAN1234A',
+              gstins: (ws.gstins || []).map((g: any, index: number) => ({
+                id: g.id,
+                gstin: g.gstin,
+                legal_name: g.legal_name,
+                trade_name: g.trade_name,
+                state: g.state,
+                status: g.status || 'Regular',
+                registration_type: g.registration_type || 'regular',
+                isConnected: true, // For demo, assume all connected
+                is_default: g.is_default || false,
+              }))
+            }));
+            
+            if (businessesFromWorkspaces.length > 0) {
+              setBusinesses(businessesFromWorkspaces);
+              setIsLoadingBusinesses(false);
+              return;
+            }
+          }
+        } catch (error) {
+          console.error('Error loading demo workspaces:', error);
+        }
+      }
+
       if (!currentOrganization?.id) {
         setBusinesses(buildBusinessesFromGstProfiles());
         setIsLoadingBusinesses(false);
@@ -242,18 +277,21 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
         }
       } catch (error) {
         console.error('Error fetching businesses:', error);
-        toast({
-          title: 'Error',
-          description: 'Failed to load businesses. Using offline mode.',
-          variant: 'destructive',
-        });
+        // Only show error toast if not in demo mode (where API failure is expected if no backend)
+        if (!isDemoMode) {
+          toast({
+            title: 'Error',
+            description: 'Failed to load businesses. Using offline mode.',
+            variant: 'destructive',
+          });
+        }
         setBusinesses(buildBusinessesFromGstProfiles());
       } finally {
         setIsLoadingBusinesses(false);
       }
     };
     fetchBusinesses();
-  }, [currentOrganization?.id, gstProfiles, currentGstProfile?.id]);
+  }, [currentOrganization?.id, gstProfiles, currentGstProfile?.id, isDemoMode]);
   
   // Generate return periods on mount
   useEffect(() => {

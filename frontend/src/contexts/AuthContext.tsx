@@ -291,6 +291,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) throw error;
       if (!data.user) throw new Error('Login failed: No user returned');
 
+      if (data.session?.access_token) {
+        localStorage.setItem('gst_access_token', data.session.access_token);
+      }
+
       return { error: null };
     } catch (err) {
       const error = err as AuthError;
@@ -449,6 +453,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('demo_profile', JSON.stringify(demoProfile));
     localStorage.setItem('demo_organization', JSON.stringify(demoOrganization));
     localStorage.setItem('demo_gst_profiles', JSON.stringify([demoGstProfile]));
+    localStorage.setItem('gst_access_token', 'demo-token');
   };
 
   // =====================================================

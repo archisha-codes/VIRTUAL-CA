@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useDashboardService, DashboardData, FormModule } from '@/services/dashboardService';
+import { useTenantStore } from '@/store/tenantStore';
 
 // GST Return tiles for dashboard
 const gstTiles = [
@@ -164,10 +165,12 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const { activeBusinessId } = useTenantStore();
+
   useEffect(() => {
     loadDashboardData();
     loadFormModules();
-  }, []);
+  }, [activeBusinessId]);
 
   const loadFormModules = async () => {
     try {

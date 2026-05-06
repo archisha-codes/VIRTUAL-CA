@@ -250,8 +250,8 @@ const buildValidationSummary = (
   validationResponse: GSTR1ValidationResponse,
   fallbackTotalRows = 0
 ): ValidationSummaryState => {
-  const inputValidation = validationResponse.validation_report?.input_validation || {};
-  const tableValidation = validationResponse.validation_report?.table_validation || {};
+  const inputValidation = (validationResponse.validation_report?.input_validation as any) || {};
+  const tableValidation = (validationResponse.validation_report?.table_validation as any) || {};
 
   const rules = Array.isArray(inputValidation.rules) ? inputValidation.rules : [];
   const ruleResults = Array.isArray(inputValidation.results) ? inputValidation.results : [];
@@ -296,8 +296,8 @@ const buildValidationSummary = (
         ? 'warning'
         : 'passed';
 
-    const rowIndices = Array.from(
-      new Set(
+    const rowIndices: number[] = Array.from(
+      new Set<number>(
         matchedResults
           .map((result) => result.row_index)
           .filter((rowIndex): rowIndex is number => rowIndex !== undefined && rowIndex !== null)
@@ -466,7 +466,7 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
   // Workflow state
   const [currentStepId, setCurrentStepId] = useState<WorkflowStepId>(props.initialStep || 'upload');
-  const [stepData, setStepData] = useState<Record<WorkflowStepId, any>>({});
+  const [stepData, setStepData] = useState<Partial<Record<WorkflowStepId, any>>>({});
   const [validationStatus, setValidationStatus] = useState<Record<WorkflowStepId, 'pending' | 'passed' | 'failed' | 'skipped'>>({
     upload: 'pending',
     classification: 'pending',
@@ -535,7 +535,7 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
   useEffect(() => {
     if (uploadResult?.data) {
       // Phase E4: Add defensive checks: data?.b2b && Array.isArray(data.b2b) before setting
-      const data = uploadResult.data;
+      const data = uploadResult.data as any;
       
       // DEBUG: Log uploadResult in state
       console.log('[DEBUG] useEffect triggered, uploadResult.data exists:', true);
@@ -592,11 +592,21 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
       setGstr1Data(unifiedData);
       
       // Use summary directly from backend calculations instead of recalculating
-      const backendSummary = uploadResult.data.summary || {};
+      const backendSummary = (uploadResult.data.summary as any) || {};
       const summary: GSTR1Summary = {
+        total_taxable: backendSummary.total_taxable_value || backendSummary.totalTaxableValue || 0,
+        total_igst: backendSummary.total_igst || backendSummary.totalIgst || 0,
+        total_cgst: backendSummary.total_cgst || backendSummary.totalCgst || 0,
+        total_sgst: backendSummary.total_sgst || backendSummary.totalSgst || 0,
+        total_cess: backendSummary.total_cess || backendSummary.totalCess || 0,
+        total_docs: backendSummary.total_invoices || backendSummary.totalInvoices || 0,
+        b2b_count: backendSummary.b2b_count || backendSummary.b2bCount || 0,
+        b2c_count: (backendSummary.b2cl_count || 0) + (backendSummary.b2cs_count || 0),
+        total_tax: (backendSummary.total_igst || 0) + (backendSummary.total_cgst || 0) + (backendSummary.total_sgst || 0) + (backendSummary.total_cess || 0),
+        total_value: backendSummary.total_value || 0,
+        // Aliases
         totalInvoices: backendSummary.total_invoices || backendSummary.totalInvoices || 0,
         totalTaxableValue: backendSummary.total_taxable_value || backendSummary.totalTaxableValue || 0,
-        totalTax: (backendSummary.total_igst || 0) + (backendSummary.total_cgst || 0) + (backendSummary.total_sgst || 0) + (backendSummary.total_cess || 0),
         b2bCount: backendSummary.b2b_count || backendSummary.b2bCount || 0,
         b2clCount: backendSummary.b2cl_count || backendSummary.b2clCount || 0,
         b2csCount: backendSummary.b2cs_count || backendSummary.b2csCount || 0,
@@ -666,7 +676,7 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
                   warnings: [],
                   final_status: 'success',
                 },
-                total_records: (savedState.gstr1_tables?.summary?.total_invoices ?? 0),
+                total_records: ((savedState.gstr1_tables as any)?.summary?.total_invoices ?? 0),
               }
             : null);
           
@@ -784,9 +794,9 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
           validationStatus,
           gstr1Tables,
           uploadResult: uploadResult as any,
-          classificationResult,
-          validationResult,
-          filingResult,
+          classificationResult: classificationResult as any,
+          validationResult: validationResult as any,
+          filingResult: filingResult as any,
         });
 
         console.log('[GSTR1Workflow] State saved to backend');
@@ -802,9 +812,7 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
   // Handle step change callback
   useEffect(() => {
-    if (onStepChange) {
-      onStepChange(currentStepId);
-    }
+    onStepChange?.(currentStepId);
   }, [currentStepId, onStepChange]);
 
   // Update step status
@@ -1050,7 +1058,7 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
         const transformedB2CL = transformBackendB2CLToFrontend(tables.b2cl || []);
         const transformedB2CS = transformBackendB2CSToFrontend(tables.b2cs || []);
         const transformedCDNR = transformBackendCDNRToFrontend(tables.cdnr || []);
-        const transformedExport = transformBackendExportToFrontend(tables.exp || tables.export || []);
+        const transformedExport = transformBackendExportToFrontend(tables.exp || (tables as any).export || []);
         
         console.log('[DEBUG] Transformed data:');
         console.log('[DEBUG] b2b customers:', transformedB2B.length);
@@ -1324,21 +1332,8 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
       if (result.success) {
         toast({
           title: 'Sync Initiated',
-          description: 'Syncing draft GSTR-1 from GSTN...',
+          description: result.message || 'Syncing draft GSTR-1 from GSTN...',
         });
-        // Refresh data after sync
-        if (result.data) {
-          setUploadResult({
-            success: true,
-            data: result.data,
-            validation_report: {
-              errors: [],
-              warnings: [],
-              final_status: 'success',
-            },
-            total_records: result.records_synced ?? 0,
-          } as GSTR1ProcessResponse);
-        }
       } else {
         throw new Error(result.message || 'Sync failed');
       }
@@ -1591,7 +1586,7 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
     try {
       // Call backend API to file GSTR-1
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/gstr1/file`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/gstr1/file`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2487,7 +2482,7 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
             <TabsTrigger value="b2b">B2B ({uploadResult.data.b2b?.length || 0})</TabsTrigger>
             <TabsTrigger value="b2cl">B2CL ({uploadResult.data.b2cl?.length || 0})</TabsTrigger>
             <TabsTrigger value="b2cs">B2CS ({uploadResult.data.b2cs?.length || 0})</TabsTrigger>
-            <TabsTrigger value="exp">Exports ({uploadResult.data.exp?.length || uploadResult.data.export?.length || 0})</TabsTrigger>
+            <TabsTrigger value="exp">Exports ({(uploadResult.data as any).exp?.length || (uploadResult.data as any).export?.length || 0})</TabsTrigger>
             <TabsTrigger value="cdnr">CDN/R ({uploadResult.data.cdnr?.length || 0})</TabsTrigger>
             <TabsTrigger value="hsn">HSN ({uploadResult.data.hsn?.length || 0})</TabsTrigger>
           </TabsList>
@@ -2576,8 +2571,7 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
           {/* B2B Tab */}
           <TabsContent value="b2b">
-            {/* DEBUG: Log b2bData before rendering */}
-            {console.log('[DEBUG] Rendering B2BTable, b2bData.length:', b2bData.length) || true}
+            {/* B2B Table */}
             <B2BTable 
               data={b2bData.length > 0 ? b2bData : (uploadResult.data.b2b || [])} 
               onDataChange={setB2bData}
@@ -2586,7 +2580,6 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
           {/* B2CL Tab */}
           <TabsContent value="b2cl">
-            {console.log('[DEBUG] Rendering B2CLTable, b2clData.length:', b2clData.length) || true}
             <B2CLTable 
               data={b2clData.length > 0 ? b2clData : (uploadResult.data.b2cl || [])}
               onDataChange={setB2clData}
@@ -2595,7 +2588,6 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
           {/* B2CS Tab */}
           <TabsContent value="b2cs">
-            {console.log('[DEBUG] Rendering B2CSTable, b2csData.length:', b2csData.length) || true}
             <B2CSTable 
               data={b2csData.length > 0 ? b2csData : (uploadResult.data.b2cs || [])}
               onDataChange={setB2csData}
@@ -2604,7 +2596,6 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
           {/* Exports Tab */}
           <TabsContent value="exp">
-            {console.log('[DEBUG] Rendering ExportsTable, exportsData.length:', exportsData.length) || true}
             <ExportsTable 
               data={exportsData.length > 0 ? exportsData : (uploadResult.data.exp || [])}
               onDataChange={setExportsData}
@@ -2613,7 +2604,6 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
           {/* CDN/R Tab */}
           <TabsContent value="cdnr">
-            {console.log('[DEBUG] Rendering CDNRTable, cdnrData.length:', cdnrData.length) || true}
             <CDNRTable 
               data={cdnrData.length > 0 ? cdnrData : (uploadResult.data.cdnr || [])}
               onDataChange={setCdnrData}
@@ -2622,7 +2612,6 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
           {/* HSN Tab */}
           <TabsContent value="hsn">
-            {console.log('[DEBUG] Rendering HSNTable, hsnData.length:', hsnData.length) || true}
             <HSNTable 
               data={hsnData.length > 0 ? hsnData : (uploadResult.data.hsn || [])}
               onDataChange={setHsnData}

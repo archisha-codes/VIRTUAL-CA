@@ -11,7 +11,7 @@
 import { useAuth } from '@/contexts/AuthContext';
 
 // API Base URL - should match backend FastAPI server
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 // ============================================
 // Type Definitions (matching backend schema)
@@ -269,7 +269,7 @@ export interface GSTR3BExportRequest {
 // API Helper Functions
 // ============================================
 
-async function getAuthHeaders(): Promise<HeadersInit> {
+export async function getAuthHeaders(): Promise<HeadersInit> {
   // Get JWT token from localStorage (set by FastAPI login)
   const token = localStorage.getItem('gst_access_token');
 
@@ -503,6 +503,55 @@ export async function checkBackendHealth(): Promise<boolean> {
 export async function pingBackend(): Promise<{ ping: string; timestamp: string }> {
   const response = await fetch(`${API_BASE_URL}/ping`, {
     method: 'GET',
+  });
+  return handleResponse(response);
+}
+
+// ============================================
+// Tenant & Multi-Tenancy API Functions
+// ============================================
+
+export async function fetchWorkspaces(): Promise<any[]> {
+  const response = await fetch(`${API_BASE_URL}/api/workspaces`, {
+    method: 'GET',
+    headers: await getAuthHeaders(),
+  });
+  return handleResponse(response);
+}
+
+export async function createWorkspace(name: string): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/workspaces`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...await getAuthHeaders(),
+    },
+    body: JSON.stringify({ name }),
+  });
+  return handleResponse(response);
+}
+
+export async function fetchBusinesses(workspaceId: string): Promise<any[]> {
+  const response = await fetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/businesses`, {
+    method: 'GET',
+    headers: await getAuthHeaders(),
+  });
+  return handleResponse(response);
+}
+
+export async function createBusiness(workspaceId: string, data: {
+  legal_name: string;
+  trade_name?: string;
+  gstin: string;
+  pan?: string;
+}): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/businesses`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...await getAuthHeaders(),
+    },
+    body: JSON.stringify(data),
   });
   return handleResponse(response);
 }
@@ -2386,24 +2435,6 @@ export async function getWorkspace(workspaceId: string): Promise<WorkspaceDetail
   return handleResponse<WorkspaceDetails>(response);
 }
 
-/**
- * Create a new workspace
- * POST /api/workspaces
- */
-export async function createWorkspace(
-  userId: string,
-  data: CreateWorkspaceRequest
-): Promise<Workspace> {
-  const response = await fetch(`${API_BASE_URL}/api/workspaces?user_id=${encodeURIComponent(userId)}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...await getAuthHeaders(),
-    },
-    body: JSON.stringify(data),
-  });
-  return handleResponse<Workspace>(response);
-}
 
 /**
  * Update a workspace

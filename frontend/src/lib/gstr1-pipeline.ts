@@ -186,6 +186,16 @@ export type GSTR1Summary = {
   b2c_count: number
   total_tax: number
   total_value: number
+  // Frontend aliases
+  totalInvoices?: number
+  totalTaxableValue?: number
+  b2bCount?: number
+  b2clCount?: number
+  b2csCount?: number
+  exportCount?: number
+  cdnrCount?: number
+  cndsCount?: number
+  hsnCount?: number
 }
 
 /**
@@ -194,7 +204,7 @@ export type GSTR1Summary = {
  * @returns Summary statistics
  */
 export function calculateSummary(data: GSTR1Row[]): GSTR1Summary {
-  return {
+  const summary = {
     total_taxable: data.reduce((s, r) => s + r.taxable_value, 0),
     total_igst: data.reduce((s, r) => s + r.igst, 0),
     total_cgst: data.reduce((s, r) => s + r.cgst, 0),
@@ -205,6 +215,19 @@ export function calculateSummary(data: GSTR1Row[]): GSTR1Summary {
     b2c_count: data.filter(d => d.section === "B2C").length,
     total_tax: data.reduce((s, r) => s + r.total_tax, 0),
     total_value: data.reduce((s, r) => s + r.total_value, 0)
+  }
+
+  return {
+    ...summary,
+    totalInvoices: summary.total_docs,
+    totalTaxableValue: summary.total_taxable,
+    b2bCount: summary.b2b_count,
+    b2clCount: 0, // Calculated separately in workflow
+    b2csCount: summary.b2c_count,
+    exportCount: 0,
+    cdnrCount: 0,
+    cndsCount: 0,
+    hsnCount: 0
   }
 }
 

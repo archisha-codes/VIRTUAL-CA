@@ -45,6 +45,8 @@ import {
 } from '@/lib/api';
 import { autoMapColumns, type ColumnMapping } from '@/lib/excel-parser';
 import { useNavigate } from 'react-router-dom';
+import { useTenantStore } from '@/store/tenantStore';
+
 
 interface GSTR1PreparePageProps {
   gstin: string;
@@ -54,6 +56,7 @@ interface GSTR1PreparePageProps {
 export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePageProps) {
   const { toast } = useToast();
   const { currentOrganization } = useAuth();
+  const { businesses: allWorkspaceBusinesses } = useTenantStore();
   const navigate = useNavigate();
   const workspaceId = currentOrganization?.id;
 
@@ -212,6 +215,33 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
     if (b2csCount > 0) sections.push({ id: 'b2cs', name: 'B2CS', docCount: b2csCount, taxableAmount: calculateTotal(b2csData), tax: calculateTax(b2csData, 'cgst') + calculateTax(b2csData, 'sgst') + calculateTax(b2csData, 'cess') });
     if (expCount > 0) sections.push({ id: 'exp', name: 'Export', docCount: expCount, taxableAmount: calculateTotal(expData), tax: calculateTax(expData, 'igst') + calculateTax(expData, 'cess') });
     if (cdnrCount > 0) sections.push({ id: 'cdnr', name: 'CDN/R', docCount: cdnrCount, taxableAmount: calculateTotal(cdnrData), tax: calculateTax(cdnrData, 'igst') + calculateTax(cdnrData, 'cgst') + calculateTax(cdnrData, 'sgst') + calculateTax(cdnrData, 'cess') });
+
+    if (allWorkspaceBusinesses.length > 0) {
+      return allWorkspaceBusinesses.map(biz => {
+        const isSelected = biz.gstin === selectedGstin;
+        return {
+          id: biz.id,
+          businessName: biz.legal_name,
+          gstins: [{
+            id: biz.id + "-gstin",
+            gstin: biz.gstin,
+            legalName: biz.legal_name,
+            state: biz.trade_name || 'State',
+            status: isSelected ? 'pending' : 'not_started',
+            isConnected: isSelected ? (currentOrganization?.gstProfiles?.find(p => p.gstin === selectedGstin)?.is_active || false) : false,
+            docCount: isSelected ? totalDocs : 0,
+            taxableAmount: isSelected ? taxableAmount : 0,
+            totalTax: isSelected ? totalTax : 0,
+            totalInvoiceValue: isSelected ? totalInvoiceValue : 0,
+            igst: isSelected ? totalIgst : 0,
+            cgst: isSelected ? totalCgst : 0,
+            sgst: isSelected ? totalSgst : 0,
+            cess: isSelected ? totalCess : 0,
+            sections: isSelected ? sections : []
+          }]
+        };
+      });
+    }
 
     return [{
       id: '1',

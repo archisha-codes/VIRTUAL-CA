@@ -182,11 +182,13 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
         }
       } catch (error) {
         console.error('Error fetching businesses:', error);
-        toast({
-          title: 'Error',
-          description: 'Failed to load businesses. Using offline mode.',
-          variant: 'destructive',
-        });
+        if (!isDemoMode) {
+          toast({
+            title: 'Error',
+            description: 'Failed to load businesses. Using offline mode.',
+            variant: 'destructive',
+          });
+        }
         setBusinesses(fallbackBusinesses);
       } finally {
         setIsLoadingBusinesses(false);
