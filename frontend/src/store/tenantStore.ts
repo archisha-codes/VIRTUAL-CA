@@ -32,27 +32,15 @@ export const useTenantStore = create<TenantState>()(
       fetchWorkspaces: async () => {
         set({ isLoading: true, error: null });
         try {
-          // Check for demo mode in localStorage
-          const isDemoMode = localStorage.getItem('auth_mode') === 'demo';
-          
-          let workspaces = [];
-          if (isDemoMode) {
-            const demoWorkspacesStr = localStorage.getItem('demo_workspaces');
-            workspaces = demoWorkspacesStr ? JSON.parse(demoWorkspacesStr) : [];
-          } else {
-            workspaces = await fetchWorkspaces();
-          }
-
+          const workspaces = await fetchWorkspaces();
           set({ workspaces, isLoading: false });
           
-          // Validate existing active workspace
           const { activeWorkspaceId } = get();
           if (activeWorkspaceId) {
             const exists = workspaces.some((w: Workspace) => w.id === activeWorkspaceId);
             if (!exists) {
               set({ activeWorkspaceId: null, activeBusinessId: null, businesses: [] });
             } else {
-              // If it exists, refresh its businesses
               await get().fetchBusinesses(activeWorkspaceId);
             }
           }
@@ -64,21 +52,9 @@ export const useTenantStore = create<TenantState>()(
       fetchBusinesses: async (workspaceId: string) => {
         set({ isLoading: true, error: null });
         try {
-          const isDemoMode = localStorage.getItem('auth_mode') === 'demo';
-          
-          let businesses = [];
-          if (isDemoMode) {
-            const demoWorkspacesStr = localStorage.getItem('demo_workspaces');
-            const demoWorkspaces = demoWorkspacesStr ? JSON.parse(demoWorkspacesStr) : [];
-            const ws = demoWorkspaces.find((w: any) => w.id === workspaceId);
-            businesses = ws ? (ws.gstins || []) : [];
-          } else {
-            businesses = await apiFetchBusinesses(workspaceId);
-          }
-
+          const businesses = await apiFetchBusinesses(workspaceId);
           set({ businesses, isLoading: false });
           
-          // Validate existing active business
           const { activeBusinessId } = get();
           if (activeBusinessId) {
             const exists = businesses.some((b: Business) => b.id === activeBusinessId);

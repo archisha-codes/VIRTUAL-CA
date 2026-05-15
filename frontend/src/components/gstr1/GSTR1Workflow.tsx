@@ -72,6 +72,7 @@ import {
 import { processGSTR1Excel, apiExportGSTR1Excel, downloadExcelFromResponse, validateGSTR1, validateGSTR1File, saveGstr1State, getGstr1State, deleteGstr1State, getExcelColumns, type GSTR1ProcessResponse } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTenantStore, useActiveWorkspace, useActiveBusiness } from '@/store/tenantStore';
 
 // Import table components for displaying all GSTR-1 tables
 import { HSNTable } from './HSNTable';
@@ -455,12 +456,14 @@ interface GSTR1WorkflowProps {
 export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
   const { toast } = useToast();
   const navigate = useNavigate();
-  const { currentOrganization, currentGstProfile } = useAuth();
+  const { user } = useAuth();
+  const activeWorkspace = useActiveWorkspace();
+  const activeBusiness = useActiveBusiness();
   
   // Get GSTIN and return period from AuthContext or props (props take precedence for backward compatibility)
-  const gstin = props.gstin || currentGstProfile?.gstin || '';
+  const gstin = props.gstin || activeBusiness?.gstin || '';
   const returnPeriod = props.returnPeriod || '';
-  const workspaceId = currentOrganization?.id;
+  const workspaceId = activeWorkspace?.id;
   
   const { onComplete, onStepChange } = props;
 

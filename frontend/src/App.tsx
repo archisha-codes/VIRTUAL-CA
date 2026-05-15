@@ -54,31 +54,16 @@ import SupportChatDrawer, { SupportChatButton } from "./components/support/Suppo
 
 const queryClient = new QueryClient();
 
-// Onboarding route wrapper - redirects to dashboard if not needed
+// Onboarding route wrapper
 function OnboardingRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading, isOnboarding, isDemoMode } = useAuth();
+  const { user, loading } = useAuth();
 
-  if (loading) {
-    return null;
-  }
-
-  // If no user and not demo mode, go to auth
-  if (!user && !isDemoMode) {
-    return <Navigate to="/auth" replace />;
-  }
-
-  // If not onboarding and not demo mode, go to dashboard
-  if (!isOnboarding && !isDemoMode) {
-    return <Navigate to="/dashboard" replace />;
-  }
-
-  // If demo mode, skip onboarding
-  if (isDemoMode) {
-    return <Navigate to="/dashboard" replace />;
-  }
+  if (loading) return null;
+  if (!user) return <Navigate to="/auth" replace />;
 
   return <>{children}</>;
 }
+
 
 const App = () => (
   <QueryClientProvider client={queryClient}>

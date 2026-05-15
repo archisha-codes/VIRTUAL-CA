@@ -42,7 +42,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
 import { Calendar as CalendarPicker } from '@/components/ui/calendar';
-import { useAuth } from '@/contexts/AuthContext';
+import { useActiveWorkspace } from '@/store/tenantStore';
 import { getGstr1State, processGSTR1Excel, saveGstr1State } from '@/lib/api';
 import { parseExcelFile, autoMapColumns, REQUIRED_FIELDS, type ColumnMapping } from '@/lib/excel-parser';
 import {
@@ -340,8 +340,8 @@ export default function GSTR1SummaryDrawer({
   onSelectGstin,
   returnPeriod = ''
 }: GSTR1SummaryDrawerProps) {
-  const { currentOrganization } = useAuth();
-  const workspaceId = currentOrganization?.id || '';
+  const activeWorkspace = useActiveWorkspace();
+  const workspaceId = activeWorkspace?.id || '';
   // Summary data from workflow state
   const [summaryData, setSummaryData] = useState<any>(null);
   const [isLoadingData, setIsLoadingData] = useState(false);

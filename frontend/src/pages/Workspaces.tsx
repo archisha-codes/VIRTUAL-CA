@@ -95,27 +95,10 @@ interface ConsolidatedMetrics {
 
 const API_BASE = '/api';
 
-// Local storage keys for demo mode
-const DEMO_WORKSPACES_KEY = 'demo_workspaces';
-
-// Helper to get demo workspaces from localStorage
-const getDemoWorkspaces = (): Workspace[] => {
-  try {
-    const data = localStorage.getItem(DEMO_WORKSPACES_KEY);
-    return data ? JSON.parse(data) : [];
-  } catch {
-    return [];
-  }
-};
-
-// Helper to save demo workspaces to localStorage
-const saveDemoWorkspaces = (workspaces: Workspace[]): void => {
-  localStorage.setItem(DEMO_WORKSPACES_KEY, JSON.stringify(workspaces));
-};
 
 export default function Workspaces() {
   const { toast } = useToast();
-  const { user, isDemoMode } = useAuth();
+  const { user } = useAuth();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selectedWorkspace, setSelectedWorkspace] = useState<WorkspaceDetails | null>(null);
   const [loading, setLoading] = useState(true);
@@ -153,25 +136,13 @@ export default function Workspaces() {
   }, []);
 
   useEffect(() => {
-    if (selectedWorkspace) {
+    if (selectedWorkspace?.id) {
       fetchWorkspaceDetails(selectedWorkspace.id);
       fetchMetrics(selectedWorkspace.id);
     }
-  }, [selectedWorkspace, period]);
+  }, [selectedWorkspace?.id, period]);
 
   const fetchWorkspaces = async () => {
-    // Demo mode: use localStorage
-    if (isDemoMode) {
-      setError(null);
-      const demoWorkspaces = getDemoWorkspaces();
-      setWorkspaces(demoWorkspaces);
-      if (demoWorkspaces.length > 0 && !selectedWorkspace) {
-        setSelectedWorkspace(demoWorkspaces[0] as unknown as WorkspaceDetails);
-      }
-      setLoading(false);
-      return;
-    }
-
     if (!user) {
       setError('Please sign in to view workspaces');
       setLoading(false);
@@ -233,33 +204,7 @@ export default function Workspaces() {
   };
 
   const createWorkspace = async () => {
-    // Demo mode: create workspace in localStorage
-    if (isDemoMode) {
-      const newWs: Workspace = {
-        id: `demo-ws-${Date.now()}`,
-        pan: newWorkspace.pan || 'DEMOPAN1234A',
-        name: newWorkspace.name || 'Demo Workspace',
-        description: newWorkspace.description || '',
-        gstin_count: 0,
-        active_gstin_count: 0,
-        member_count: 1,
-        owner_id: user?.id || 'demo-user',
-        created_at: new Date().toISOString(),
-      };
-      
-      const demoWorkspaces = getDemoWorkspaces();
-      demoWorkspaces.push(newWs);
-      saveDemoWorkspaces(demoWorkspaces);
-      
-      toast({
-        title: 'Success',
-        description: 'Workspace created successfully'
-      });
-      setShowCreateDialog(false);
-      fetchWorkspaces();
-      setNewWorkspace({ pan: '', name: '', description: '' });
-      return;
-    }
+    if (!user) return;
 
     if (!user) return;
     
@@ -293,50 +238,14 @@ export default function Workspaces() {
   };
 
   const addGSTIN = async () => {
-    // Demo mode: add GSTIN to localStorage
-    if (isDemoMode && selectedWorkspace) {
-      const newGstin: GSTIN = {
-        id: `demo-gstin-${Date.now()}`,
-        gstin: newGSTIN.gstin || '29ABCDE1234F1Z5',
-        legal_name: newGSTIN.legal_name || 'Demo Legal Name',
-        trade_name: newGSTIN.trade_name || 'Demo Trade Name',
-        state: newGSTIN.state || 'Karnataka',
-        status: 'active',
-        registration_type: newGSTIN.registration_type || 'regular',
-        category: newGSTIN.category || 'b2b',
-        is_default: (selectedWorkspace as unknown as WorkspaceDetails).gstins?.length === 0,
-      };
-      
-      const demoWorkspaces = getDemoWorkspaces();
-      const wsIndex = demoWorkspaces.findIndex(ws => ws.id === selectedWorkspace.id);
-      if (wsIndex >= 0) {
-        if (!demoWorkspaces[wsIndex].gstins) {
-          (demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).gstins = [];
-        }
-        (demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).gstins.push(newGstin);
-        demoWorkspaces[wsIndex].gstin_count = ((demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).gstins?.length || 0);
-        demoWorkspaces[wsIndex].active_gstin_count = ((demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).gstins?.filter(g => g.status === 'active').length || 0);
-        saveDemoWorkspaces(demoWorkspaces);
-      }
-      
+    if (!selectedWorkspace || !user) {
       toast({
-        title: 'Success',
-        description: 'GSTIN added successfully'
-      });
-      setShowGSTINDialog(false);
-      fetchWorkspaceDetails(selectedWorkspace.id);
-      setNewGSTIN({
-        gstin: '',
-        legal_name: '',
-        trade_name: '',
-        state: '',
-        registration_type: 'regular',
-        category: 'b2b'
+        title: 'Error',
+        description: 'Selected workspace or user not found',
+        variant: 'destructive'
       });
       return;
     }
-
-    if (!selectedWorkspace || !user) return;
     
     try {
       const response = await fetch(`${API_BASE}/workspaces/${selectedWorkspace.id}/gstins?user_id=${user.id}`, {
@@ -363,49 +272,21 @@ export default function Workspaces() {
           registration_type: 'regular',
           category: 'b2b'
         });
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to add GSTIN');
       }
     } catch (error) {
       console.error('Failed to add GSTIN:', error);
       toast({
         title: 'Error',
-        description: 'Failed to add GSTIN',
+        description: error instanceof Error ? error.message : 'Failed to add GSTIN',
         variant: 'destructive'
       });
     }
   };
 
   const addMember = async () => {
-    // Demo mode: add member to localStorage
-    if (isDemoMode && selectedWorkspace) {
-      const newMemberData: Member = {
-        user_id: newMember.user_id || 'demo-member@example.com',
-        role: newMember.role || 'viewer',
-        gstin_access: newMember.gstin_access || [],
-        can_manage_members: false,
-        can_file_returns: false,
-      };
-      
-      const demoWorkspaces = getDemoWorkspaces();
-      const wsIndex = demoWorkspaces.findIndex(ws => ws.id === selectedWorkspace.id);
-      if (wsIndex >= 0) {
-        if (!demoWorkspaces[wsIndex].members) {
-          (demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).members = [];
-        }
-        (demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).members.push(newMemberData);
-        demoWorkspaces[wsIndex].member_count = ((demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).members?.length || 0);
-        saveDemoWorkspaces(demoWorkspaces);
-      }
-      
-      toast({
-        title: 'Success',
-        description: 'Member added successfully'
-      });
-      setShowMemberDialog(false);
-      fetchWorkspaceDetails(selectedWorkspace.id);
-      setNewMember({ user_id: '', role: 'viewer', gstin_access: [] });
-      return;
-    }
-
     if (!selectedWorkspace || !user) return;
     
     try {
@@ -438,26 +319,6 @@ export default function Workspaces() {
   };
 
   const removeGSTIN = async (gstinId: string) => {
-    // Demo mode: remove GSTIN from localStorage
-    if (isDemoMode && selectedWorkspace) {
-      const demoWorkspaces = getDemoWorkspaces();
-      const wsIndex = demoWorkspaces.findIndex(ws => ws.id === selectedWorkspace.id);
-      if (wsIndex >= 0) {
-        (demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).gstins = 
-          ((demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).gstins || []).filter(g => g.id !== gstinId);
-        demoWorkspaces[wsIndex].gstin_count = ((demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).gstins?.length || 0);
-        demoWorkspaces[wsIndex].active_gstin_count = ((demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).gstins?.filter(g => g.status === 'active').length || 0);
-        saveDemoWorkspaces(demoWorkspaces);
-      }
-      
-      toast({
-        title: 'Success',
-        description: 'GSTIN removed successfully'
-      });
-      fetchWorkspaceDetails(selectedWorkspace.id);
-      return;
-    }
-
     if (!selectedWorkspace || !user) return;
     
     try {
@@ -479,25 +340,6 @@ export default function Workspaces() {
   };
 
   const removeMember = async (userId: string) => {
-    // Demo mode: remove member from localStorage
-    if (isDemoMode && selectedWorkspace) {
-      const demoWorkspaces = getDemoWorkspaces();
-      const wsIndex = demoWorkspaces.findIndex(ws => ws.id === selectedWorkspace.id);
-      if (wsIndex >= 0) {
-        (demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).members = 
-          ((demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).members || []).filter(m => m.user_id !== userId);
-        demoWorkspaces[wsIndex].member_count = ((demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).members?.length || 0);
-        saveDemoWorkspaces(demoWorkspaces);
-      }
-      
-      toast({
-        title: 'Success',
-        description: 'Member removed successfully'
-      });
-      fetchWorkspaceDetails(selectedWorkspace.id);
-      return;
-    }
-
     if (!selectedWorkspace || !user) return;
     
     try {
@@ -519,24 +361,6 @@ export default function Workspaces() {
   };
 
   const switchGSTIN = async (gstinId: string) => {
-    // Demo mode: switch GSTIN in localStorage
-    if (isDemoMode && selectedWorkspace) {
-      const demoWorkspaces = getDemoWorkspaces();
-      const wsIndex = demoWorkspaces.findIndex(ws => ws.id === selectedWorkspace.id);
-      if (wsIndex >= 0) {
-        ((demoWorkspaces[wsIndex] as unknown as WorkspaceDetails).gstins || []).forEach(g => {
-          g.is_default = g.id === gstinId;
-        });
-        saveDemoWorkspaces(demoWorkspaces);
-      }
-      
-      toast({
-        title: 'Success',
-        description: 'GSTIN switched successfully'
-      });
-      return;
-    }
-
     if (!selectedWorkspace || !user) return;
     
     try {

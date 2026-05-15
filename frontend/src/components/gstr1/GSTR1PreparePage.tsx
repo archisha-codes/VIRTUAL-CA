@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Filter,
   Upload,
@@ -33,7 +34,7 @@ import GSTR1ActionsDropdown from './GSTR1ActionsDropdown';
 import GSTR1SummaryDrawer from './GSTR1SummaryDrawer';
 import GSTR1DrawerFlow from './GSTR1DrawerFlow';
 import { useToast } from '@/hooks/use-toast';
-import { useAuth } from '@/contexts/AuthContext';
+import { useActiveWorkspace, useActiveBusiness } from '@/store/tenantStore';
 import {
   processGSTR1Excel,
   saveGstr1State,
@@ -44,7 +45,6 @@ import {
   type GSTR1ProcessResponse
 } from '@/lib/api';
 import { autoMapColumns, type ColumnMapping } from '@/lib/excel-parser';
-import { useNavigate } from 'react-router-dom';
 import { useTenantStore } from '@/store/tenantStore';
 
 
@@ -55,10 +55,10 @@ interface GSTR1PreparePageProps {
 
 export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePageProps) {
   const { toast } = useToast();
-  const { currentOrganization } = useAuth();
+  const activeWorkspace = useActiveWorkspace();
   const { businesses: allWorkspaceBusinesses } = useTenantStore();
   const navigate = useNavigate();
-  const workspaceId = currentOrganization?.id;
+  const workspaceId = activeWorkspace?.id;
 
   // State
   const [isLoading, setIsLoading] = useState(false);
@@ -228,7 +228,7 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
             legalName: biz.legal_name,
             state: biz.trade_name || 'State',
             status: isSelected ? 'pending' : 'not_started',
-            isConnected: isSelected ? (currentOrganization?.gstProfiles?.find(p => p.gstin === selectedGstin)?.is_active || false) : false,
+            isConnected: isSelected ? (activeWorkspace?.gstins?.find(p => p.gstin === selectedGstin)?.status === 'active') : false,
             docCount: isSelected ? totalDocs : 0,
             taxableAmount: isSelected ? taxableAmount : 0,
             totalTax: isSelected ? totalTax : 0,
@@ -252,7 +252,7 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
         legalName: selectedGstin,
         state: 'State',
         status: 'pending',
-        isConnected: currentOrganization?.gstProfiles?.find(p => p.gstin === selectedGstin)?.is_active || false,
+        isConnected: activeWorkspace?.gstins?.find(p => p.gstin === selectedGstin)?.status === 'active',
         docCount: totalDocs,
         taxableAmount,
         totalTax,

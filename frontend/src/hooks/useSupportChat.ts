@@ -7,6 +7,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTenantStore, useActiveWorkspace, useActiveBusiness } from '@/store/tenantStore';
 import {
   getSupportConversations,
   createSupportConversation,
@@ -70,7 +71,9 @@ interface UseSupportChatReturn {
 }
 
 export function useSupportChat(): UseSupportChatReturn {
-  const { user, currentOrganization, currentGstProfile } = useAuth();
+  const { user } = useAuth();
+  const activeWorkspace = useActiveWorkspace();
+  const activeBusiness = useActiveBusiness();
   
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<SupportMessage[]>([]);
@@ -82,16 +85,16 @@ export function useSupportChat(): UseSupportChatReturn {
   const close = useCallback(() => setIsOpen(false), []);
   const toggle = useCallback(() => setIsOpen(prev => !prev), []);
 
-  // Build context from auth
+  // Build context from auth and tenant store
   const buildContext = useCallback((): ConversationContext => ({
-    workspaceId: currentOrganization?.id,
-    businessId: currentOrganization?.id,
-    gstin: currentGstProfile?.gstin,
+    workspaceId: activeWorkspace?.id,
+    businessId: activeBusiness?.id,
+    gstin: activeBusiness?.gstin,
     userId: user?.id,
     context: {
-      selectedGstin: currentGstProfile?.gstin,
+      selectedGstin: activeBusiness?.gstin,
     },
-  }), [user, currentOrganization, currentGstProfile]);
+  }), [user, activeWorkspace, activeBusiness]);
 
   // Load conversations - Backend API only
   const loadConversations = useCallback(async () => {
@@ -100,7 +103,7 @@ export function useSupportChat(): UseSupportChatReturn {
     setLoading(true);
     setError(null);
     
-    const workspaceId = currentOrganization?.id;
+    const workspaceId = activeWorkspace?.id;
     
     if (!workspaceId) {
       setError('No workspace selected. Please select a workspace to use support chat.');
@@ -110,7 +113,7 @@ export function useSupportChat(): UseSupportChatReturn {
     
     try {
       // Fetch conversations from backend API
-      const conversations = await getSupportConversations(workspaceId);
+      const conversations = await getSupportConversations(activeWorkspace!.id);
       
       if (conversations && Array.isArray(conversations) && conversations.length > 0) {
         // Use the most recent conversation
@@ -135,7 +138,7 @@ export function useSupportChat(): UseSupportChatReturn {
         }
       } else {
         // No conversation exists, create one
-        const newConv = await createSupportConversation(workspaceId, 'Support Chat');
+        const newConv = await createSupportConversation(activeWorkspace!.id, 'Support Chat');
         setCurrentConversationId(newConv.id);
         setMessages([]);
       }
@@ -153,7 +156,7 @@ export function useSupportChat(): UseSupportChatReturn {
     } finally {
       setLoading(false);
     }
-  }, [user, currentOrganization?.id]);
+  }, [user, activeWorkspace?.id]);
 
   // Send a message - Backend API only
   const sendMessage = useCallback(async (text: string, context?: ConversationContext) => {

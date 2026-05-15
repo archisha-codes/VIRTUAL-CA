@@ -9,7 +9,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { TablePagination } from '@/components/invoices/TablePagination';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/integrations/supabase/client';
+import { useActiveWorkspace } from '@/store/tenantStore';
+import { getAuthHeaders } from '@/lib/api';
 import { CheckCircle, AlertTriangle, XCircle, Search, FileText, Loader2, Info } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -45,107 +46,52 @@ export default function InvoicesPage() {
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const { user, isDemoMode } = useAuth();
+  
+  const { user } = useAuth();
+  const activeWorkspace = useActiveWorkspace();
+
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
   useEffect(() => {
-    if (user || isDemoMode) {
+    if (activeWorkspace?.id) {
       fetchInvoices();
+    } else {
+      setInvoices([]);
+      setLoading(false);
     }
-  }, [user, isDemoMode]);
+  }, [activeWorkspace?.id]);
 
   const fetchInvoices = async () => {
-    // If in demo mode, show demo data
-    if (isDemoMode) {
-      setLoading(true);
-      // Demo data
-      const demoInvoices: Invoice[] = [
-        {
-          id: '1',
-          invoice_number: 'INV-2026-001',
-          invoice_date: '2026-03-01',
-          customer_name: 'ABC Corporation',
-          customer_gstin: '29ABCDE1234F1Z5',
-          place_of_supply: '29-Karnataka',
-          taxable_value: 100000,
-          cgst_amount: 9000,
-          sgst_amount: 9000,
-          igst_amount: 0,
-          total_amount: 118000,
-          invoice_type: 'B2B',
-          validation_status: 'passed',
-          validation_errors: [],
-        },
-        {
-          id: '2',
-          invoice_number: 'INV-2026-002',
-          invoice_date: '2026-03-02',
-          customer_name: 'XYZ Traders',
-          customer_gstin: '27XYZAB5678G1Z6',
-          place_of_supply: '27-Maharashtra',
-          taxable_value: 50000,
-          cgst_amount: 0,
-          sgst_amount: 0,
-          igst_amount: 9000,
-          total_amount: 59000,
-          invoice_type: 'B2B',
-          validation_status: 'passed',
-          validation_errors: [],
-        },
-        {
-          id: '3',
-          invoice_number: 'INV-2026-003',
-          invoice_date: '2026-03-03',
-          customer_name: 'Retail Shop',
-          customer_gstin: '',
-          place_of_supply: '29-Karnataka',
-          taxable_value: 25000,
-          cgst_amount: 2250,
-          sgst_amount: 2250,
-          igst_amount: 0,
-          total_amount: 29500,
-          invoice_type: 'B2CS',
-          validation_status: 'warning',
-          validation_errors: [{ field: 'customer_gstin', message: 'GSTIN not provided for B2CS', severity: 'warning' }],
-        },
-      ];
-      setInvoices(demoInvoices);
-      setLoading(false);
-      return;
-    }
-
-    if (!user) return;
+    if (!activeWorkspace?.id) return;
 
     setLoading(true);
-    const { data, error } = await supabase
-      .from('invoices')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('invoice_category', 'sales')
-      .order('created_at', { ascending: false });
+    try {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${API_BASE}/api/invoices?workspace_id=${activeWorkspace.id}&category=sales`, {
+        headers
+      });
 
-    if (!error && data) {
-      const typedInvoices = data.map(inv => ({
-        ...inv,
-        taxable_value: inv.taxable_value ?? 0,
-        cgst_amount: inv.cgst_amount ?? 0,
-        sgst_amount: inv.sgst_amount ?? 0,
-        igst_amount: inv.igst_amount ?? 0,
-        total_amount: inv.total_amount ?? 0,
-        invoice_type: inv.invoice_type ?? 'B2B',
-        validation_status: inv.validation_status ?? 'pending',
-        validation_errors: (inv.validation_errors as unknown as Invoice['validation_errors']) || [],
-      }));
-      setInvoices(typedInvoices);
+      if (response.ok) {
+        const data = await response.json();
+        setInvoices(data || []);
+      } else {
+        console.error('Failed to fetch invoices:', response.status);
+        setInvoices([]);
+      }
+    } catch (error) {
+      console.error('Error fetching invoices:', error);
+      setInvoices([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const filteredInvoices = useMemo(() => {
     return invoices.filter(inv => {
       const matchesSearch = 
-        inv.invoice_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        inv.customer_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        inv.customer_gstin?.toLowerCase().includes(searchTerm.toLowerCase());
+        (inv.invoice_number?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+        (inv.customer_name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+        (inv.customer_gstin?.toLowerCase() || '').includes(searchTerm.toLowerCase());
 
       const matchesStatus = statusFilter === 'all' || inv.validation_status === statusFilter;
       const matchesType = typeFilter === 'all' || inv.invoice_type === typeFilter;
@@ -326,7 +272,7 @@ export default function InvoicesPage() {
                                   {status.label}
                                 </div>
                               </TooltipTrigger>
-                              {invoice.validation_errors.length > 0 && (
+                              {invoice.validation_errors && invoice.validation_errors.length > 0 && (
                                 <TooltipContent className="max-w-xs">
                                   <ul className="text-xs space-y-1">
                                     {invoice.validation_errors.map((err, idx) => (

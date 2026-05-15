@@ -9,7 +9,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuGroup } from "@/components/ui/dropdown-menu";
-import { useAuth } from '@/contexts/AuthContext';
+import { useActiveWorkspace } from '@/store/tenantStore';
 import { getGstr1State, saveGstr1State } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 
@@ -20,9 +20,9 @@ interface Props {
 
 export default function GSTR1UploadToGSTNPage({ gstin, returnPeriod }: Props) {
   const navigate = useNavigate();
-  const { currentOrganization } = useAuth();
+  const activeWorkspace = useActiveWorkspace();
   const { toast } = useToast();
-  const workspaceId = currentOrganization?.id;
+  const workspaceId = activeWorkspace?.id;
 
   const [isLoading, setIsLoading] = useState(true);
   const [data, setData] = useState<any>(null);
@@ -74,10 +74,28 @@ export default function GSTR1UploadToGSTNPage({ gstin, returnPeriod }: Props) {
         return acc + iamt + camt + samt + csamt;
       }, 0) || 0;
 
-      tax = getTax(gstr1Data.b2b) + getTax(gstr1Data.b2cl) + getTax(gstr1Data.b2cs) + getTax(gstr1Data.exp) + getTax(gstr1Data.cdnr);
+      const getTaxDetails = (arr: any[], type: 'igst' | 'cgst' | 'sgst' | 'cess') => arr?.reduce((acc: number, val: any) => {
+        const fieldMap: Record<string, string[]> = {
+          'igst': ['iamt', 'igst', 'integrated_tax'],
+          'cgst': ['camt', 'cgst', 'central_tax'],
+          'sgst': ['samt', 'sgst', 'state_tax'],
+          'cess': ['csamt', 'cess', 'compensation_tax']
+        };
+        const fields = fieldMap[type];
+        const val_tax = fields.reduce((sum, f) => sum + Number(val[f] || 0), 0);
+        return acc + val_tax;
+      }, 0) || 0;
+
+      const igst = getTaxDetails(gstr1Data.b2b, 'igst') + getTaxDetails(gstr1Data.b2cl, 'igst') + getTaxDetails(gstr1Data.exp, 'igst');
+      const cgst = getTaxDetails(gstr1Data.b2b, 'cgst') + getTaxDetails(gstr1Data.b2cs, 'cgst');
+      const sgst = getTaxDetails(gstr1Data.b2b, 'sgst') + getTaxDetails(gstr1Data.b2cs, 'sgst');
+      const cess = getTaxDetails(gstr1Data.b2b, 'cess') + getTaxDetails(gstr1Data.b2cs, 'cess') + getTaxDetails(gstr1Data.exp, 'cess');
+
+      tax = igst + cgst + sgst + cess;
+      return { docs, taxable, tax, igst, cgst, sgst, cess };
     }
 
-    return { docs, taxable, tax };
+    return { docs, taxable, tax, igst: 0, cgst: 0, sgst: 0, cess: 0 };
   };
 
   const totals = getTotals();
@@ -92,18 +110,31 @@ export default function GSTR1UploadToGSTNPage({ gstin, returnPeriod }: Props) {
 
   const processUpload = async () => {
     setShowNoDataAction(false);
-    setUploading(true);
-
-    // Simulate upload delay
-    setTimeout(() => {
-      setUploading(false);
-      setUploadedStatus(true);
+    try {
+      if (workspaceId && gstin && returnPeriod) {
+        // In real scenario, we'd save this status to backend
+        await saveGstr1State(workspaceId, gstin, returnPeriod, {
+          ...data,
+          filing_status: 'uploaded',
+          uploaded_at: new Date().toISOString()
+        });
+        
+        setUploadedStatus(true);
+        toast({
+          title: 'Upload Successful',
+          description: 'Data has been uploaded to GSTN successfully.',
+        });
+      }
+    } catch (e) {
+      console.error(e);
       toast({
-        title: 'Upload Successful',
-        description: 'Data has been uploaded to GSTN successfully.',
+        title: 'Upload Failed',
+        description: 'Failed to upload data to GSTN.',
+        variant: 'destructive'
       });
-      // In real scenario, we'd save this status to backend
-    }, 2000);
+    } finally {
+      setUploading(false);
+    }
   };
 
   const formatCurrency = (amount: number) => {
@@ -234,7 +265,9 @@ export default function GSTR1UploadToGSTNPage({ gstin, returnPeriod }: Props) {
                   <div className="flex items-start gap-2 max-w-xs">
                     <div className="mt-0.5 border rounded-sm w-3.5 h-3.5 flex items-center justify-center shrink-0 border-slate-300 text-slate-500"><span className="leading-none text-[8px]">-</span></div>
                     <div className="flex flex-col">
-                      <span className="font-semibold text-slate-700 leading-tight">Bauer Engineering India Private Limited</span>
+                      <span className="font-semibold text-slate-700 leading-tight">
+                        {activeWorkspace?.gstins?.find(g => g.gstin === gstin)?.legal_name || 'Business'}
+                      </span>
                       <span className="font-mono text-[11px] text-slate-500">{gstin}</span>
                       <a href="#" className="text-[10px] text-blue-600 font-bold uppercase hover:underline mt-1">View Sections</a>
                     </div>
@@ -251,10 +284,10 @@ export default function GSTR1UploadToGSTNPage({ gstin, returnPeriod }: Props) {
                 <td className="py-2 px-4 text-center border-r border-slate-100 text-slate-600">{totals.docs || '-'}</td>
                 <td className="py-2 px-4 text-right border-r border-slate-100 text-blue-600 font-medium">{formatCurrency(totals.taxable)}</td>
                 <td className="py-2 px-4 text-right border-r border-slate-100 text-blue-600 font-medium">{formatCurrency(totals.tax)}</td>
-                <td className="py-2 px-4 text-right border-r border-slate-100 text-orange-500 font-medium">{formatCurrency(0)}</td>
-                <td className="py-2 px-4 text-right border-r border-slate-100 text-orange-500 font-medium">{formatCurrency(0)}</td>
-                <td className="py-2 px-4 text-right border-r border-slate-100 text-orange-500 font-medium">{formatCurrency(0)}</td>
-                <td className="py-2 px-4 text-right border-r border-slate-100 text-orange-500 font-medium">{formatCurrency(0)}</td>
+                 <td className="py-2 px-4 text-right border-r border-slate-100 text-orange-500 font-medium">{formatCurrency(totals.igst)}</td>
+                <td className="py-2 px-4 text-right border-r border-slate-100 text-orange-500 font-medium">{formatCurrency(totals.cgst)}</td>
+                <td className="py-2 px-4 text-right border-r border-slate-100 text-orange-500 font-medium">{formatCurrency(totals.sgst)}</td>
+                <td className="py-2 px-4 text-right border-r border-slate-100 text-orange-500 font-medium">{formatCurrency(totals.cess)}</td>
                 <td className="py-2 px-4 text-center border-r border-slate-100 align-middle" rowSpan={3}>
                   <a href="#" className="text-blue-600 font-bold hover:underline">View</a>
                 </td>

@@ -8,7 +8,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { TablePagination } from '@/components/invoices/TablePagination';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/integrations/supabase/client';
+import { useActiveWorkspace } from '@/store/tenantStore';
+import { getAuthHeaders } from '@/lib/api';
 import { CheckCircle, AlertTriangle, XCircle, Search, Loader2, Info, ShoppingCart } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -43,91 +44,52 @@ export default function PurchaseInvoicesPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const { user, isDemoMode } = useAuth();
+  
+  const { user } = useAuth();
+  const activeWorkspace = useActiveWorkspace();
+
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
   useEffect(() => {
-    if (user || isDemoMode) {
+    if (activeWorkspace?.id) {
       fetchInvoices();
+    } else {
+      setInvoices([]);
+      setLoading(false);
     }
-  }, [user, isDemoMode]);
+  }, [activeWorkspace?.id]);
 
   const fetchInvoices = async () => {
-    // If in demo mode, show demo data
-    if (isDemoMode) {
-      setLoading(true);
-      // Demo purchase data
-      const demoInvoices: PurchaseInvoice[] = [
-        {
-          id: '1',
-          invoice_number: 'PO-2026-001',
-          invoice_date: '2026-02-15',
-          supplier_name: 'Global Suppliers Ltd',
-          supplier_gstin: '29GLOBALL1234Z1',
-          place_of_supply: '29-Karnataka',
-          taxable_value: 75000,
-          cgst_amount: 6750,
-          sgst_amount: 6750,
-          igst_amount: 0,
-          total_amount: 88500,
-          invoice_type: 'B2B',
-          validation_status: 'passed',
-          validation_errors: [],
-        },
-        {
-          id: '2',
-          invoice_number: 'PO-2026-002',
-          invoice_date: '2026-02-20',
-          supplier_name: 'Import Co',
-          supplier_gstin: '27IMPORTS5678Z2',
-          place_of_supply: '27-Maharashtra',
-          taxable_value: 150000,
-          cgst_amount: 0,
-          sgst_amount: 0,
-          igst_amount: 27000,
-          total_amount: 177000,
-          invoice_type: 'B2B',
-          validation_status: 'passed',
-          validation_errors: [],
-        },
-      ];
-      setInvoices(demoInvoices);
-      setLoading(false);
-      return;
-    }
-
-    if (!user) return;
+    if (!activeWorkspace?.id) return;
 
     setLoading(true);
-    const { data, error } = await supabase
-      .from('invoices')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('invoice_category', 'purchase')
-      .order('created_at', { ascending: false });
+    try {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${API_BASE}/api/invoices?workspace_id=${activeWorkspace.id}&category=purchase`, {
+        headers
+      });
 
-    if (!error && data) {
-      const typedInvoices = data.map(inv => ({
-        ...inv,
-        taxable_value: inv.taxable_value ?? 0,
-        cgst_amount: inv.cgst_amount ?? 0,
-        sgst_amount: inv.sgst_amount ?? 0,
-        igst_amount: inv.igst_amount ?? 0,
-        total_amount: inv.total_amount ?? 0,
-        invoice_type: inv.invoice_type ?? 'B2B',
-        validation_status: inv.validation_status ?? 'pending',
-        validation_errors: (inv.validation_errors as unknown as PurchaseInvoice['validation_errors']) || [],
-      }));
-      setInvoices(typedInvoices);
+      if (response.ok) {
+        const data = await response.json();
+        setInvoices(data || []);
+      } else {
+        console.error('Failed to fetch purchase invoices:', response.status);
+        setInvoices([]);
+      }
+    } catch (error) {
+      console.error('Error fetching purchase invoices:', error);
+      setInvoices([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const filteredInvoices = useMemo(() => {
     return invoices.filter(inv => {
       const matchesSearch = 
-        inv.invoice_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        inv.supplier_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        inv.supplier_gstin?.toLowerCase().includes(searchTerm.toLowerCase());
+        (inv.invoice_number?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+        (inv.supplier_name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+        (inv.supplier_gstin?.toLowerCase() || '').includes(searchTerm.toLowerCase());
 
       const matchesStatus = statusFilter === 'all' || inv.validation_status === statusFilter;
 
@@ -154,10 +116,10 @@ export default function PurchaseInvoicesPage() {
   };
 
   const totals = {
-    taxable: invoices.reduce((sum, inv) => sum + inv.taxable_value, 0),
-    igst: invoices.reduce((sum, inv) => sum + inv.igst_amount, 0),
-    cgst: invoices.reduce((sum, inv) => sum + inv.cgst_amount, 0),
-    sgst: invoices.reduce((sum, inv) => sum + inv.sgst_amount, 0),
+    taxable: invoices.reduce((sum, inv) => sum + (inv.taxable_value || 0), 0),
+    igst: invoices.reduce((sum, inv) => sum + (inv.igst_amount || 0), 0),
+    cgst: invoices.reduce((sum, inv) => sum + (inv.cgst_amount || 0), 0),
+    sgst: invoices.reduce((sum, inv) => sum + (inv.sgst_amount || 0), 0),
   };
 
   const formatCurrency = (value: number) => {
@@ -329,7 +291,7 @@ export default function PurchaseInvoicesPage() {
                                   {status.label}
                                 </div>
                               </TooltipTrigger>
-                              {invoice.validation_errors.length > 0 && (
+                              {invoice.validation_errors && invoice.validation_errors.length > 0 && (
                                 <TooltipContent className="max-w-xs">
                                   <ul className="text-xs space-y-1">
                                     {invoice.validation_errors.map((err, idx) => (

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Bell, Search, User, Settings, HelpCircle, LogOut, Sparkles, Sun, Moon, Monitor, Building2 } from 'lucide-react';
+import { Bell, Search, User, Settings, HelpCircle, LogOut, Sun, Moon, Monitor, Building2 } from 'lucide-react';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { TenantSelector } from './TenantSelector';
 import { Button } from '@/components/ui/button';
@@ -58,12 +58,15 @@ const API_URL = import.meta.env.VITE_API_URL || '';
 const API_BASE = `${API_URL}/api`;
 
 export function AppHeader({ title = 'Dashboard' }: AppHeaderProps) {
-  const { profile, signOut, isDemoMode, user, currentOrganization, switchOrganization } = useAuth();
+  const { user, signOut } = useAuth();
   const { theme, setTheme, resolvedTheme } = useTheme();
   const navigate = useNavigate();
   
+  const displayName = user?.full_name || user?.email?.split('@')[0] || 'User';
+  const avatarLetter = displayName.charAt(0).toUpperCase();
+
   const handleSignOut = async () => {
-    await signOut();
+    signOut();
     navigate('/auth');
   };
 
@@ -73,12 +76,6 @@ export function AppHeader({ title = 'Dashboard' }: AppHeaderProps) {
         <SidebarTrigger className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100" />
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{title}</h1>
-          {isDemoMode && (
-            <Badge variant="outline" className="bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-700 gap-1">
-              <Sparkles className="h-3 w-3" />
-              Demo
-            </Badge>
-          )}
         </div>
       </div>
 
@@ -146,26 +143,21 @@ export function AppHeader({ title = 'Dashboard' }: AppHeaderProps) {
             <Button variant="ghost" className="gap-2 hover:bg-slate-100 dark:hover:bg-slate-800">
               <div className="h-8 w-8 rounded-full bg-gradient-to-br from-purple-600 to-indigo-700 flex items-center justify-center">
                 <span className="text-sm font-medium text-white">
-                  {profile?.full_name?.charAt(0)?.toUpperCase() || 'U'}
+                  {avatarLetter}
                 </span>
               </div>
               <span className="hidden md:inline text-sm font-medium text-slate-700 dark:text-slate-200">
-                {profile?.full_name || 'User'}
+                {displayName}
               </span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>
               <div className="flex flex-col">
-                <span>{profile?.full_name || 'User'}</span>
+                <span>{displayName}</span>
                 <span className="text-xs font-normal text-slate-500 dark:text-slate-400">
-                  {profile?.company_name || 'No company'}
+                  {user?.email || ''}
                 </span>
-                {isDemoMode && (
-                  <span className="text-xs font-normal text-amber-600 dark:text-amber-400 mt-1">
-                    Demo Mode
-                  </span>
-                )}
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />

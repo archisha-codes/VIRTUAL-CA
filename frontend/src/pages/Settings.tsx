@@ -10,8 +10,9 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase, isSupabaseConfigured } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { useTenantStore } from '@/store/tenantStore';
+import { getAuthHeaders } from '@/lib/api';
 import { Loader2, Save, Plus, Trash2, Users, Key, User, Bell } from 'lucide-react';
 
 // Schemas
@@ -31,7 +32,7 @@ const passwordSchema = z.object({
 });
 
 const entitySchema = z.object({
-  entity_name: z.string().min(2, 'Entity name is required'),
+  legal_name: z.string().min(2, 'Legal name is required'),
   gstin: z.string().length(15, 'GSTIN must be 15 characters'),
 });
 
@@ -47,7 +48,7 @@ export default function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') || 'profile';
   
-  const { user, profile, isDemoMode } = useAuth();
+  const { user } = useAuth();
   const { toast } = useToast();
 
   const setActiveTab = (tab: string) => {
@@ -69,7 +70,7 @@ export default function SettingsPage() {
             </TabsTrigger>
             <TabsTrigger value="entities" className="flex items-center gap-2">
               <Users className="h-4 w-4" />
-              Entities
+              Businesses
             </TabsTrigger>
             <TabsTrigger value="notifications" className="flex items-center gap-2">
               <Bell className="h-4 w-4" />
@@ -103,57 +104,41 @@ export default function SettingsPage() {
 // =====================================================
 
 function ProfileTab() {
-  const { user, profile, isDemoMode } = useAuth();
+  const { user, updateProfile } = useAuth();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
 
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
     defaultValues: {
-      full_name: profile?.full_name || (isDemoMode ? 'Demo User' : ''),
-      company_name: profile?.company_name || '',
-      phone: profile?.phone || '',
+      full_name: user?.full_name || '',
+      company_name: '', // We don't have this in user model yet
+      phone: '',
     },
   });
 
   useEffect(() => {
-    if (profile) {
+    if (user) {
       form.reset({
-        full_name: profile.full_name || '',
-        company_name: profile.company_name || '',
-        phone: profile.phone || '',
+        full_name: user.full_name || '',
+        company_name: '',
+        phone: '',
       });
     }
-  }, [profile, form]);
+  }, [user, form]);
 
   const onSubmit = async (data: ProfileFormData) => {
-    if (isDemoMode) {
-      toast({ title: 'Demo Mode', description: 'Changes disabled in demo mode' });
-      return;
-    }
-
-    if (!isSupabaseConfigured) {
-      toast({ title: 'Error', description: 'Supabase not configured', variant: 'destructive' });
-      return;
-    }
-
     setIsLoading(true);
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .upsert({
-          user_id: user!.id,
-          full_name: data.full_name,
-          company_name: data.company_name,
-          phone: data.phone,
-          updated_at: new Date().toISOString(),
-        });
+      const { error } = await updateProfile({
+        full_name: data.full_name,
+      });
 
       if (error) throw error;
 
       toast({ title: 'Profile updated', description: 'Your profile has been saved.' });
-    } catch (error) {
-      toast({ title: 'Error', description: 'Failed to update profile', variant: 'destructive' });
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message || 'Failed to update profile', variant: 'destructive' });
     } finally {
       setIsLoading(false);
     }
@@ -179,6 +164,7 @@ function ProfileTab() {
               <FormItem>
                 <FormLabel>Company Name</FormLabel>
                 <FormControl><Input placeholder="ABC Pvt Ltd" {...field} /></FormControl>
+                <FormDescription>Firm or company name</FormDescription>
                 <FormMessage />
               </FormItem>
             )} />
@@ -189,7 +175,7 @@ function ProfileTab() {
                 <FormMessage />
               </FormItem>
             )} />
-            <Button type="submit" disabled={isLoading || isDemoMode}>
+            <Button type="submit" disabled={isLoading}>
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               <Save className="mr-2 h-4 w-4" />
               Save Changes
@@ -206,7 +192,7 @@ function ProfileTab() {
 // =====================================================
 
 function PasswordTab() {
-  const { user, isDemoMode } = useAuth();
+  const { changePassword } = useAuth();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
 
@@ -216,21 +202,9 @@ function PasswordTab() {
   });
 
   const onSubmit = async (data: PasswordFormData) => {
-    if (isDemoMode) {
-      toast({ title: 'Demo Mode', description: 'Password change disabled in demo mode' });
-      return;
-    }
-
-    if (!isSupabaseConfigured) {
-      toast({ title: 'Error', description: 'Supabase not configured', variant: 'destructive' });
-      return;
-    }
-
     setIsLoading(true);
     try {
-      const { error } = await supabase.auth.updateUser({
-        password: data.newPassword,
-      });
+      const { error } = await changePassword(data.currentPassword, data.newPassword);
 
       if (error) throw error;
 
@@ -273,7 +247,7 @@ function PasswordTab() {
                 <FormMessage />
               </FormItem>
             )} />
-            <Button type="submit" disabled={isLoading || isDemoMode}>
+            <Button type="submit" disabled={isLoading}>
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Update Password
             </Button>
@@ -285,106 +259,116 @@ function PasswordTab() {
 }
 
 // =====================================================
-// ENTITIES TAB
+// ENTITIES TAB (Now Businesses in Workspace)
 // =====================================================
 
 function EntitiesTab() {
-  const { user, isDemoMode } = useAuth();
+  const { user } = useAuth();
+  const { activeWorkspaceId } = useTenantStore();
   const { toast } = useToast();
-  const [entities, setEntities] = useState<any[]>([]);
+  const [businesses, setBusinesses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
   const form = useForm<EntityFormData>({
     resolver: zodResolver(entitySchema),
-    defaultValues: { entity_name: '', gstin: '' },
+    defaultValues: { legal_name: '', gstin: '' },
   });
 
   useEffect(() => {
-    loadEntities();
-  }, [user]);
-
-  const loadEntities = async () => {
-    if (isDemoMode) {
-      setEntities([{ id: 'demo', entity_name: 'Demo Company', gstin: '29ABCDE1234F1Z5' }]);
+    if (activeWorkspaceId) {
+      loadBusinesses();
+    } else {
       setLoading(false);
-      return;
     }
+  }, [activeWorkspaceId]);
 
-    if (!isSupabaseConfigured) {
-      setLoading(false);
-      return;
-    }
-
+  const loadBusinesses = async () => {
+    if (!activeWorkspaceId) return;
+    setLoading(true);
     try {
-      const { data } = await supabase!.from('entities').select('*').eq('owner_user_id', user!.id);
-      setEntities(data || []);
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/businesses?workspace_id=${activeWorkspaceId}`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        setBusinesses(data || []);
+      }
     } catch (error) {
-      console.error('Failed to load entities:', error);
+      console.error('Failed to load businesses:', error);
     } finally {
       setLoading(false);
     }
   };
 
   const onSubmit = async (data: EntityFormData) => {
-    if (isDemoMode) {
-      toast({ title: 'Demo Mode', description: 'Entity creation disabled in demo mode' });
-      return;
-    }
-
+    if (!activeWorkspaceId) return;
     setIsSaving(true);
     try {
-      const { error } = await supabase.from('entities').insert({
-        entity_name: data.entity_name,
-        gstin: data.gstin.toUpperCase(),
-        owner_user_id: user!.id,
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/businesses?workspace_id=${activeWorkspaceId}`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          legal_name: data.legal_name,
+          gstin: data.gstin.toUpperCase(),
+        }),
       });
 
-      if (error) throw error;
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.detail || 'Failed to create business');
+      }
 
-      toast({ title: 'Entity created', description: 'New entity has been added.' });
+      toast({ title: 'Business added', description: 'New business has been added to your workspace.' });
       form.reset();
       setShowForm(false);
-      loadEntities();
+      loadBusinesses();
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message || 'Failed to create entity', variant: 'destructive' });
+      toast({ title: 'Error', description: error.message || 'Failed to add business', variant: 'destructive' });
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (isDemoMode) return;
-
     try {
-      await supabase.from('entities').delete().eq('id', id);
-      toast({ title: 'Entity deleted' });
-      loadEntities();
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/businesses/${id}`, {
+        method: 'DELETE',
+        headers,
+      });
+
+      if (!res.ok) throw new Error('Failed to delete');
+
+      toast({ title: 'Business deleted' });
+      loadBusinesses();
     } catch (error) {
-      toast({ title: 'Error', description: 'Failed to delete entity', variant: 'destructive' });
+      toast({ title: 'Error', description: 'Failed to delete business', variant: 'destructive' });
     }
   };
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Entities</CardTitle>
-        <CardDescription>Manage your business entities (Organizations)</CardDescription>
+        <CardTitle>Businesses</CardTitle>
+        <CardDescription>Manage businesses in your active workspace</CardDescription>
       </CardHeader>
       <CardContent>
         {!showForm ? (
           <Button onClick={() => setShowForm(true)} className="mb-4">
             <Plus className="mr-2 h-4 w-4" />
-            Add Entity
+            Add Business
           </Button>
         ) : (
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 mb-6 p-4 bg-slate-50 rounded-lg">
-              <FormField control={form.control} name="entity_name" render={({ field }) => (
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 mb-6 p-4 bg-slate-50 dark:bg-slate-900 rounded-lg">
+              <FormField control={form.control} name="legal_name" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Entity Name</FormLabel>
-                  <FormControl><Input placeholder="ABC Company" {...field} /></FormControl>
+                  <FormLabel>Legal Name</FormLabel>
+                  <FormControl><Input placeholder="ABC Pvt Ltd" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
               )} />
@@ -403,7 +387,7 @@ function EntitiesTab() {
                 </FormItem>
               )} />
               <div className="flex gap-2">
-                <Button type="submit" disabled={isSaving || isDemoMode}>
+                <Button type="submit" disabled={isSaving}>
                   {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save
                 </Button>
@@ -419,21 +403,19 @@ function EntitiesTab() {
           <Loader2 className="h-6 w-6 animate-spin" />
         ) : (
           <div className="space-y-2">
-            {entities.map((entity) => (
-              <div key={entity.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+            {businesses.map((business) => (
+              <div key={business.id} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
                 <div>
-                  <p className="font-medium">{entity.entity_name}</p>
-                  <p className="text-sm text-slate-500 font-mono">{entity.gstin}</p>
+                  <p className="font-medium">{business.legal_name}</p>
+                  <p className="text-sm text-slate-500 font-mono">{business.gstin}</p>
                 </div>
-                {!isDemoMode && (
-                  <Button variant="ghost" size="icon" onClick={() => handleDelete(entity.id)}>
-                    <Trash2 className="h-4 w-4 text-red-500" />
-                  </Button>
-                )}
+                <Button variant="ghost" size="icon" onClick={() => handleDelete(business.id)}>
+                  <Trash2 className="h-4 w-4 text-red-500" />
+                </Button>
               </div>
             ))}
-            {entities.length === 0 && !loading && (
-              <p className="text-center text-slate-500 py-4">No entities found. Add one to get started.</p>
+            {businesses.length === 0 && !loading && (
+              <p className="text-center text-slate-500 py-4">No businesses found. Add one to get started.</p>
             )}
           </div>
         )}
@@ -443,62 +425,18 @@ function EntitiesTab() {
 }
 
 // =====================================================
-// NOTIFICATIONS TAB
+// NOTIFICATIONS TAB (Simplified)
 // =====================================================
 
 function NotificationsTab() {
-  const { user, isDemoMode } = useAuth();
-  const { toast } = useToast();
   const [settings, setSettings] = useState({
     notifications: true,
     email_alerts: true,
-    sms_alerts: false,
   });
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    loadSettings();
-  }, [user]);
-
-  const loadSettings = async () => {
-    if (isDemoMode) {
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const { data } = await supabase
-        .from('user_settings')
-        .select('notifications')
-        .eq('user_id', user!.id)
-        .single();
-      
-      if (data) {
-        setSettings(prev => ({ ...prev, notifications: data.notifications }));
-      }
-    } catch (error) {
-      console.error('Failed to load settings:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleToggle = async (key: keyof typeof settings) => {
-    if (isDemoMode) return;
-
-    const newValue = !settings[key];
-    setSettings(prev => ({ ...prev, [key]: newValue }));
-
-    try {
-      await supabase.from('user_settings').upsert({
-        user_id: user!.id,
-        notifications: newValue,
-        updated_at: new Date().toISOString(),
-      });
-    } catch (error) {
-      console.error('Failed to save settings:', error);
-    }
+  const handleToggle = (key: keyof typeof settings) => {
+    setSettings(prev => ({ ...prev, [key]: !prev[key] }));
+    // In a real app, save to backend
   };
 
   return (
@@ -508,38 +446,32 @@ function NotificationsTab() {
         <CardDescription>Manage how you receive alerts</CardDescription>
       </CardHeader>
       <CardContent>
-        {loading ? (
-          <Loader2 className="h-6 w-6 animate-spin" />
-        ) : (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium">Push Notifications</p>
-                <p className="text-sm text-slate-500">Receive in-app notifications</p>
-              </div>
-              <input
-                type="checkbox"
-                checked={settings.notifications}
-                onChange={() => handleToggle('notifications')}
-                disabled={isDemoMode}
-                className="h-5 w-5"
-              />
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium">Push Notifications</p>
+              <p className="text-sm text-slate-500">Receive in-app notifications</p>
             </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium">Email Alerts</p>
-                <p className="text-sm text-slate-500">Receive important updates via email</p>
-              </div>
-              <input
-                type="checkbox"
-                checked={settings.email_alerts}
-                onChange={() => handleToggle('email_alerts')}
-                disabled={isDemoMode}
-                className="h-5 w-5"
-              />
-            </div>
+            <input
+              type="checkbox"
+              checked={settings.notifications}
+              onChange={() => handleToggle('notifications')}
+              className="h-5 w-5"
+            />
           </div>
-        )}
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium">Email Alerts</p>
+              <p className="text-sm text-slate-500">Receive important updates via email</p>
+            </div>
+            <input
+              type="checkbox"
+              checked={settings.email_alerts}
+              onChange={() => handleToggle('email_alerts')}
+              className="h-5 w-5"
+            />
+          </div>
+        </div>
       </CardContent>
     </Card>
   );

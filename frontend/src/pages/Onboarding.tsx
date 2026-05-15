@@ -89,7 +89,6 @@ export default function Onboarding() {
     createOrganization, 
     createGstProfile,
     completeOnboarding,
-    isDemoMode,
   } = useAuth();
 
   const [isLoading, setIsLoading] = useState(false);
@@ -184,13 +183,11 @@ export default function Onboarding() {
           Get Started <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>
-      {!isDemoMode && (
-        <div className="pt-2">
-          <Button variant="link" onClick={handleSkip}>
-            Skip for now
-          </Button>
-        </div>
-      )}
+      <div className="pt-2">
+        <Button variant="link" onClick={handleSkip}>
+          Skip for now
+        </Button>
+      </div>
     </div>
   );
 

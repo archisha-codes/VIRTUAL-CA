@@ -532,7 +532,7 @@ export async function createWorkspace(name: string): Promise<any> {
 }
 
 export async function fetchBusinesses(workspaceId: string): Promise<any[]> {
-  const response = await fetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/businesses`, {
+  const response = await fetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/gstins`, {
     method: 'GET',
     headers: await getAuthHeaders(),
   });
@@ -545,7 +545,7 @@ export async function createBusiness(workspaceId: string, data: {
   gstin: string;
   pan?: string;
 }): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/businesses`, {
+  const response = await fetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/gstins`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -2694,26 +2694,15 @@ export async function getGstr1State(
     return_period: returnPeriod,
   });
 
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/gstr1/state?${params}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        ...await getAuthHeaders(),
-      },
-    });
+  const response = await fetch(`${API_BASE_URL}/api/gstr1/state?${params}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      ...await getAuthHeaders(),
+    },
+  });
 
-    return await handleResponse<GSTR1StateResponse>(response);
-  } catch (error: any) {
-    if (error instanceof TypeError && error.message.includes('fetch')) {
-      return {
-        success: false,
-        message: "Backend unreachable, using local fallback",
-        data: null as any
-      };
-    }
-    throw error;
-  }
+  return await handleResponse<GSTR1StateResponse>(response);
 }
 
 /**
@@ -2761,25 +2750,15 @@ export async function deleteGstr1State(
     return_period: returnPeriod,
   });
 
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/gstr1/state?${params}`, {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        ...await getAuthHeaders(),
-      },
-    });
+  const response = await fetch(`${API_BASE_URL}/api/gstr1/state?${params}`, {
+    method: 'DELETE',
+    headers: {
+      'Content-Type': 'application/json',
+      ...await getAuthHeaders(),
+    },
+  });
 
-    return await handleResponse<{ success: boolean; message: string }>(response);
-  } catch (error: any) {
-    if (error instanceof TypeError && error.message.includes('fetch')) {
-      return {
-        success: true,
-        message: "Backend offline, local fallback used"
-      };
-    }
-    throw error;
-  }
+  return await handleResponse<{ success: boolean; message: string }>(response);
 }
 
 /**

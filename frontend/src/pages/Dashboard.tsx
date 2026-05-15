@@ -157,7 +157,7 @@ interface DashboardStats {
 }
 
 export default function Dashboard() {
-  const { user, profile } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const { getDashboardData, getForms } = useDashboardService();
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
@@ -225,7 +225,7 @@ export default function Dashboard() {
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                   <h2 className="text-2xl font-bold">
-                    Welcome back, {profile?.full_name?.split(' ')[0] || 'User'}!
+                    Welcome back, {user?.full_name?.split(' ')[0] || user?.email?.split('@')[0] || 'User'}!
                   </h2>
                   <p className="text-white/80 mt-1">
                     Manage your GST compliance

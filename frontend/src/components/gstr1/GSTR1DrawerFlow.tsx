@@ -47,6 +47,7 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTenantStore, useActiveWorkspace, useActiveBusiness } from '@/store/tenantStore';
 import { 
   getBusinessesWithGstins, 
   generateGSTINOTP, 
@@ -148,7 +149,9 @@ const generateReturnPeriods = (): ReturnPeriod[] => {
 
 export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initialDrawer = 'business', initialGstins = [], initialPeriod = '' }: GSTR1DrawerFlowProps) {
   const { toast } = useToast();
-  const { currentOrganization, gstProfiles, currentGstProfile, isDemoMode } = useAuth();
+  const { user } = useAuth();
+  const activeWorkspace = useActiveWorkspace();
+  const activeBusiness = useActiveBusiness();
   
   // State for business selector
   const [businesses, setBusinesses] = useState<BusinessEntity[]>([]);
@@ -174,41 +177,7 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
   }, [initialDrawer]);
 
   const buildBusinessesFromGstProfiles = (): BusinessEntity[] => {
-    const grouped = new Map<string, BusinessEntity>();
-
-    gstProfiles
-      .filter((profile) => profile.is_active)
-      .forEach((profile) => {
-        const gstin = String(profile.gstin || '').trim().toUpperCase();
-        if (!gstin) {
-          return;
-        }
-
-        const businessName = profile.legal_name || profile.trade_name || gstin;
-        const pan = gstin.length >= 12 ? gstin.slice(2, 12) : gstin.slice(0, 10);
-        const key = `${businessName}::${pan}`;
-
-        if (!grouped.has(key)) {
-          grouped.set(key, {
-            id: profile.org_id || profile.id,
-            name: businessName,
-            pan,
-            gstins: [],
-          });
-        }
-
-        const business = grouped.get(key)!;
-        business.gstins.push({
-          id: profile.id,
-          gstin,
-          state: getStateName(profile.state_code || gstin.slice(0, 2)),
-          status: 'Regular',
-          isConnected: profile.is_active,
-          lastVerified: profile.updated_at,
-        });
-      });
-
-    return Array.from(grouped.values());
+    return [];
   };
   
   // Fetch businesses from API on mount
@@ -224,74 +193,36 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
         setReturnPeriod(firstOpen.value);
       }
 
-      // Demo mode: use workspaces from localStorage
-      if (isDemoMode) {
-        try {
-          const demoWorkspacesStr = localStorage.getItem('demo_workspaces');
-          if (demoWorkspacesStr) {
-            const demoWorkspaces = JSON.parse(demoWorkspacesStr);
-            // Convert workspaces to businesses format
-            const businessesFromWorkspaces: BusinessEntity[] = demoWorkspaces.map((ws: any) => ({
-              id: ws.id,
-              name: ws.name,
-              pan: ws.pan || 'DEMOPAN1234A',
-              gstins: (ws.gstins || []).map((g: any, index: number) => ({
-                id: g.id,
-                gstin: g.gstin,
-                legal_name: g.legal_name,
-                trade_name: g.trade_name,
-                state: g.state,
-                status: g.status || 'Regular',
-                registration_type: g.registration_type || 'regular',
-                isConnected: true, // For demo, assume all connected
-                is_default: g.is_default || false,
-              }))
-            }));
-            
-            if (businessesFromWorkspaces.length > 0) {
-              setBusinesses(businessesFromWorkspaces);
-              setIsLoadingBusinesses(false);
-              return;
-            }
-          }
-        } catch (error) {
-          console.error('Error loading demo workspaces:', error);
-        }
-      }
-
-      if (!currentOrganization?.id) {
-        setBusinesses(buildBusinessesFromGstProfiles());
+      // We'll use the active workspace from the store
+      if (!activeWorkspace?.id) {
+        setBusinesses([]);
         setIsLoadingBusinesses(false);
         return;
       }
       
       setIsLoadingBusinesses(true);
       try {
-        const response = await getBusinessesWithGstins(currentOrganization.id);
+        const response = await getBusinessesWithGstins(activeWorkspace.id);
         if (response.success && response.data) {
-          const nextBusinesses = response.data.length > 0 ? response.data : buildBusinessesFromGstProfiles();
-          setBusinesses(nextBusinesses);
+          setBusinesses(response.data);
         } else {
           console.warn('Failed to fetch businesses:', response);
-          setBusinesses(buildBusinessesFromGstProfiles());
+          setBusinesses([]);
         }
       } catch (error) {
         console.error('Error fetching businesses:', error);
-        // Only show error toast if not in demo mode (where API failure is expected if no backend)
-        if (!isDemoMode) {
-          toast({
-            title: 'Error',
-            description: 'Failed to load businesses. Using offline mode.',
-            variant: 'destructive',
-          });
-        }
-        setBusinesses(buildBusinessesFromGstProfiles());
+        toast({
+          title: 'Error',
+          description: 'Failed to load businesses from server.',
+          variant: 'destructive',
+        });
+        setBusinesses([]);
       } finally {
         setIsLoadingBusinesses(false);
       }
     };
     fetchBusinesses();
-  }, [currentOrganization?.id, gstProfiles, currentGstProfile?.id, isDemoMode]);
+  }, [activeWorkspace?.id]);
   
   // Generate return periods on mount
   useEffect(() => {
@@ -303,18 +234,18 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
   }, []);
 
   useEffect(() => {
-    if (selectedGstins.size > 0 || !currentGstProfile?.gstin || businesses.length === 0) {
+    if (selectedGstins.size > 0 || !activeBusiness?.gstin || businesses.length === 0) {
       return;
     }
 
     const hasCurrentGstin = businesses.some((business) =>
-      business.gstins.some((gstin) => gstin.gstin === currentGstProfile.gstin)
+      business.gstins.some((gstin) => gstin.gstin === activeBusiness.gstin)
     );
 
     if (hasCurrentGstin) {
-      setSelectedGstins(new Set([currentGstProfile.gstin]));
+      setSelectedGstins(new Set([activeBusiness.gstin]));
     }
-  }, [businesses, currentGstProfile?.gstin, selectedGstins.size]);
+  }, [businesses, activeBusiness?.gstin, selectedGstins.size]);
   
   // Filter businesses by search term
   const filteredBusinesses = businesses.filter(business => {
@@ -352,10 +283,10 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
   
   // Handle OTP initiate - calls real backend API
   const handleInitiateOtp = async (gstin: string) => {
-    if (!currentOrganization?.id) {
+    if (!activeWorkspace?.id) {
       toast({
         title: 'Error',
-        description: 'Organization not found',
+        description: 'Workspace not selected',
         variant: 'destructive',
       });
       return;
@@ -365,7 +296,7 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
     setIsLoading(true);
     
     try {
-      const response = await generateGSTINOTP(currentOrganization.id, gstin);
+      const response = await generateGSTINOTP(activeWorkspace.id, gstin);
       if (response.success && response.otp_request_id) {
         setOtpRequestId(response.otp_request_id);
         setOtpStep('verify');
@@ -409,10 +340,10 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
       return;
     }
     
-    if (!currentOrganization?.id) {
+    if (!activeWorkspace?.id) {
       toast({
         title: 'Error',
-        description: 'Organization not found',
+        description: 'Workspace not selected',
         variant: 'destructive',
       });
       return;
@@ -422,7 +353,7 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
     
     try {
       const response = await verifyGSTINOTP(
-        currentOrganization.id,
+        activeWorkspace.id,
         selectedGstinForOtp,
         otp,
         otpRequestId

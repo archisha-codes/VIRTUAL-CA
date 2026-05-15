@@ -47,6 +47,7 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { useActiveWorkspace } from '@/store/tenantStore';
 import {
   getBusinessesWithGstins,
   generateGSTINOTP,
@@ -110,8 +111,8 @@ const generateReturnPeriods = (): ReturnPeriod[] => {
 };
 
 export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GSTR3BDrawerFlowProps) {
-  const { toast } = useToast();
-  const { currentOrganization, isDemoMode } = useAuth();
+  const { user } = useAuth();
+  const activeWorkspace = useActiveWorkspace();
 
   // State for business selector
   const [businesses, setBusinesses] = useState<BusinessEntity[]>([]);
@@ -131,72 +132,37 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
   // Current drawer step
   const [currentDrawer, setCurrentDrawer] = useState<'business' | 'otp'>('business');
 
-  // Fetch businesses from API on mount
   useEffect(() => {
     const fetchBusinesses = async () => {
-      // Demo mode: use workspaces from localStorage
-      if (isDemoMode) {
-        try {
-          const demoWorkspacesStr = localStorage.getItem('demo_workspaces');
-          if (demoWorkspacesStr) {
-            const demoWorkspaces = JSON.parse(demoWorkspacesStr);
-            // Convert workspaces to businesses format
-            const businessesFromWorkspaces: BusinessEntity[] = demoWorkspaces.map((ws: any) => ({
-              id: ws.id,
-              name: ws.name,
-              pan: ws.pan || 'DEMOPAN1234A',
-              gstins: (ws.gstins || []).map((g: any, index: number) => ({
-                id: g.id,
-                gstin: g.gstin,
-                legal_name: g.legal_name,
-                trade_name: g.trade_name,
-                state: g.state,
-                status: g.status || 'Regular',
-                registration_type: g.registration_type || 'regular',
-                isConnected: index % 2 === 0, // 50% connected in demo mode
-                is_default: g.is_default || false,
-              }))
-            }));
-            setBusinesses(businessesFromWorkspaces);
-          } else {
-            setBusinesses(fallbackBusinesses);
-          }
-        } catch (error) {
-          console.error('Error loading demo workspaces:', error);
-          setBusinesses(fallbackBusinesses);
-        }
-        setIsLoadingBusinesses(false);
+      if (!activeWorkspace?.id) {
+        setBusinesses([]);
         return;
       }
 
-      if (!currentOrganization?.id) return;
-
       setIsLoadingBusinesses(true);
       try {
-        const response = await getBusinessesWithGstins(currentOrganization.id);
+        const response = await getBusinessesWithGstins(activeWorkspace.id);
         if (response.success && response.data) {
           setBusinesses(response.data);
         } else {
           console.warn('Failed to fetch businesses:', response);
-          setBusinesses(fallbackBusinesses);
+          setBusinesses([]);
         }
       } catch (error) {
         console.error('Error fetching businesses:', error);
-        if (!isDemoMode) {
-          toast({
-            title: 'Error',
-            description: 'Failed to load businesses. Using offline mode.',
-            variant: 'destructive',
-          });
-        }
-        setBusinesses(fallbackBusinesses);
+        toast({
+          title: 'Error',
+          description: 'Failed to load businesses from server.',
+          variant: 'destructive',
+        });
+        setBusinesses([]);
       } finally {
         setIsLoadingBusinesses(false);
       }
     };
 
     fetchBusinesses();
-  }, [currentOrganization?.id, isDemoMode]);
+  }, [activeWorkspace?.id]);
 
   // Generate return periods on mount
   useEffect(() => {
@@ -243,10 +209,10 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
 
   // Handle OTP initiate - calls real backend API
   const handleInitiateOtp = async (gstin: string) => {
-    if (!currentOrganization?.id) {
+    if (!activeWorkspace?.id) {
       toast({
         title: 'Error',
-        description: 'Organization not found',
+        description: 'Workspace not found',
         variant: 'destructive',
       });
       return;
@@ -256,7 +222,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
     setIsLoading(true);
 
     try {
-      const response = await generateGSTINOTP(currentOrganization.id, gstin);
+      const response = await generateGSTINOTP(activeWorkspace.id, gstin);
       if (response.success && response.otp_request_id) {
         setOtpRequestId(response.otp_request_id);
         setOtpStep('verify');
@@ -300,7 +266,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
       return;
     }
 
-    if (!currentOrganization?.id) {
+    if (!activeWorkspace?.id) {
       toast({
         title: 'Error',
         description: 'Organization not found',
@@ -313,7 +279,7 @@ export default function GSTR3BDrawerFlow({ open, onOpenChange, onContinue }: GST
 
     try {
       const response = await verifyGSTINOTP(
-        currentOrganization.id,
+        activeWorkspace.id,
         selectedGstinForOtp,
         otp,
         otpRequestId

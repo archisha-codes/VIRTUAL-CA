@@ -80,12 +80,15 @@ const announcementsNavItems = [
 ];
 
 export function AppSidebar() {
-  const { signOut, profile } = useAuth();
+  const { signOut, user } = useAuth();
   const [filingOpen, setFilingOpen] = useState(true);
   const [imsOpen, setImsOpen] = useState(true);
   const [itcOpen, setItcOpen] = useState(true);
   const [uploadOpen, setUploadOpen] = useState(true);
   const [reportsOpen, setReportsOpen] = useState(true);
+
+  const displayName = user?.full_name || user?.email?.split('@')[0] || 'User';
+  const avatarLetter = displayName.charAt(0).toUpperCase();
 
   return (
     <Sidebar className="border-r border-sidebar-border">
@@ -425,15 +428,15 @@ export function AppSidebar() {
         <div className="flex items-center gap-3 mb-3">
           <div className="h-8 w-8 rounded-full bg-sidebar-accent flex items-center justify-center">
             <span className="text-sm font-medium text-sidebar-foreground">
-              {profile?.full_name?.charAt(0)?.toUpperCase() || 'U'}
+              {avatarLetter}
             </span>
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-sidebar-foreground truncate">
-              {profile?.full_name || 'User'}
+              {displayName}
             </p>
             <p className="text-xs text-sidebar-foreground/60 truncate">
-              {profile?.company_name || 'No company'}
+              {user?.email}
             </p>
           </div>
         </div>
@@ -449,3 +452,4 @@ export function AppSidebar() {
     </Sidebar>
   );
 }
+

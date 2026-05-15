@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { MembershipRole, Profile, Membership } from '@/integrations/supabase/types';
+import { useActiveWorkspace } from '@/store/tenantStore';
+import { getAuthHeaders } from '@/lib/api';
 import { 
   Table, 
   TableBody, 
@@ -53,117 +54,54 @@ import {
   Users
 } from 'lucide-react';
 
-interface MemberWithProfile extends Membership {
-  profile?: Profile | null;
-  email?: string;
+interface Member {
+  id: string;
+  user_id: string;
+  workspace_id: string;
+  role: string;
+  user?: {
+    id: string;
+    email: string;
+    full_name: string | null;
+  } | null;
+  created_at: string;
 }
 
-// Demo members for when Supabase is unavailable
-const DEMO_MEMBERS: MemberWithProfile[] = [
-  {
-    id: 'demo-member-1',
-    user_id: 'user-1',
-    org_id: 'demo-org-id',
-    role: 'owner',
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    profile: {
-      id: 'profile-1',
-      user_id: 'user-1',
-      full_name: 'Demo User',
-      email: 'demo@virtualca.in',
-      phone: '+919999999999',
-      company_name: 'Demo Company',
-      active_entity: 'demo-org-id',
-      avatar_url: null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    },
-    email: 'demo@virtualca.in',
-  },
-  {
-    id: 'demo-member-2',
-    user_id: 'user-2',
-    org_id: 'demo-org-id',
-    role: 'admin',
-    created_at: new Date(Date.now() - 86400000 * 7).toISOString(),
-    updated_at: new Date(Date.now() - 86400000 * 7).toISOString(),
-    profile: {
-      id: 'profile-2',
-      user_id: 'user-2',
-      full_name: 'John Smith',
-      email: 'john@virtualca.in',
-      phone: '+918888888888',
-      company_name: 'Demo Company',
-      active_entity: 'demo-org-id',
-      avatar_url: null,
-      created_at: new Date(Date.now() - 86400000 * 7).toISOString(),
-      updated_at: new Date(Date.now() - 86400000 * 7).toISOString(),
-    },
-    email: 'john@virtualca.in',
-  },
-  {
-    id: 'demo-member-3',
-    user_id: 'user-3',
-    org_id: 'demo-org-id',
-    role: 'member',
-    created_at: new Date(Date.now() - 86400000 * 3).toISOString(),
-    updated_at: new Date(Date.now() - 86400000 * 3).toISOString(),
-    profile: {
-      id: 'profile-3',
-      user_id: 'user-3',
-      full_name: 'Jane Doe',
-      email: 'jane@virtualca.in',
-      phone: '+917777777777',
-      company_name: 'Demo Company',
-      active_entity: 'demo-org-id',
-      avatar_url: null,
-      created_at: new Date(Date.now() - 86400000 * 3).toISOString(),
-      updated_at: new Date(Date.now() - 86400000 * 3).toISOString(),
-    },
-    email: 'jane@virtualca.in',
-  },
-];
-
 export default function Members() {
-  const { user, currentOrganization, isDemoMode, hasRole } = useAuth();
-  const [members, setMembers] = useState<MemberWithProfile[]>([]);
+  const { user } = useAuth();
+  const activeWorkspace = useActiveWorkspace();
+  const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState<MembershipRole>('member');
+  const [inviteRole, setInviteRole] = useState('MEMBER');
   const [inviting, setInviting] = useState(false);
 
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
   // Check if user can manage members (owner or admin)
-  const canManageMembers = hasRole(['owner', 'admin']);
-  const isOwner = hasRole(['owner']);
+  const myRole = activeWorkspace?.my_role;
+  const canManageMembers = myRole === 'OWNER' || myRole === 'ADMIN';
+  const isOwner = myRole === 'OWNER';
 
   useEffect(() => {
-    loadMembers();
-  }, [currentOrganization?.id]);
-
-  const loadMembers = async () => {
-    if (!currentOrganization?.id) {
+    if (activeWorkspace?.id) {
+      loadMembers();
+    } else {
       setMembers([]);
       setLoading(false);
-      return;
     }
+  }, [activeWorkspace?.id]);
 
-    // In demo mode, use demo members
-    if (isDemoMode) {
-      setMembers(DEMO_MEMBERS);
-      setLoading(false);
-      return;
-    }
+  const loadMembers = async () => {
+    if (!activeWorkspace?.id) return;
 
     try {
       setLoading(true);
-      
-      // Fetch members with their profiles
-      // This would be a Supabase query in production
+      const headers = await getAuthHeaders();
       const response = await fetch(
-        `/api/orgs/${currentOrganization.id}/members`,
-        { method: 'GET' }
+        `${API_BASE}/api/workspaces/${activeWorkspace.id}/members`,
+        { headers }
       );
 
       if (!response.ok) {
@@ -171,10 +109,7 @@ export default function Members() {
       }
       
       const data = await response.json();
-      
-      if (data) {
-        setMembers(data as MemberWithProfile[]);
-      }
+      setMembers(data || []);
     } catch (error) {
       console.error('Error loading members:', error);
       toast.error('Failed to load members');
@@ -184,78 +119,41 @@ export default function Members() {
   };
 
   const handleInvite = async () => {
-    if (!inviteEmail || !currentOrganization?.id) return;
+    if (!inviteEmail || !activeWorkspace?.id) return;
 
     setInviting(true);
     try {
-      // In demo mode, simulate adding a member
-      if (isDemoMode) {
-        const newMember: MemberWithProfile = {
-          id: `demo-member-${Date.now()}`,
-          user_id: `user-${Date.now()}`,
-          org_id: currentOrganization.id,
-          role: inviteRole,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          profile: {
-            id: `profile-${Date.now()}`,
-            user_id: `user-${Date.now()}`,
-            full_name: inviteEmail.split('@')[0],
-            email: inviteEmail,
-            phone: null,
-            company_name: currentOrganization.name,
-            active_entity: currentOrganization.id,
-            avatar_url: null,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          },
-          email: inviteEmail,
-        };
-        setMembers([...members, newMember]);
-        toast.success(`Invitation sent to ${inviteEmail}`);
-        setInviteEmail('');
-        setIsAddDialogOpen(false);
-        return;
-      }
-
-      // In production, call API to invite member
-      const response = await fetch(`/api/orgs/${currentOrganization.id}/members/invite`, {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${API_BASE}/api/workspaces/${activeWorkspace.id}/members`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to send invitation');
+        const errData = await response.json();
+        throw new Error(errData.detail || 'Failed to add member');
       }
 
-      toast.success(`Invitation sent to ${inviteEmail}`);
+      toast.success(`Member ${inviteEmail} added successfully`);
       setInviteEmail('');
       setIsAddDialogOpen(false);
       loadMembers();
-    } catch (error) {
-      console.error('Error inviting member:', error);
-      toast.error('Failed to send invitation');
+    } catch (error: any) {
+      console.error('Error adding member:', error);
+      toast.error(error.message || 'Failed to add member');
     } finally {
       setInviting(false);
     }
   };
 
-  const handleRoleChange = async (memberId: string, newRole: MembershipRole) => {
+  const handleRoleChange = async (memberUserId: string, newRole: string) => {
+    if (!activeWorkspace?.id) return;
     try {
-      // In demo mode, update locally
-      if (isDemoMode) {
-        setMembers(members.map(m => 
-          m.id === memberId ? { ...m, role: newRole } : m
-        ));
-        toast.success('Role updated successfully');
-        return;
-      }
-
-      // In production, call API
-      const response = await fetch(`/api/orgs/${currentOrganization?.id}/members/${memberId}`, {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${API_BASE}/api/workspaces/${activeWorkspace.id}/members/${memberUserId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ role: newRole }),
       });
 
@@ -271,18 +169,13 @@ export default function Members() {
     }
   };
 
-  const handleRemoveMember = async (memberId: string) => {
+  const handleRemoveMember = async (memberUserId: string) => {
+    if (!activeWorkspace?.id) return;
     try {
-      // In demo mode, update locally
-      if (isDemoMode) {
-        setMembers(members.filter(m => m.id !== memberId));
-        toast.success('Member removed successfully');
-        return;
-      }
-
-      // In production, call API
-      const response = await fetch(`/api/orgs/${currentOrganization?.id}/members/${memberId}`, {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${API_BASE}/api/workspaces/${activeWorkspace.id}/members/${memberUserId}`, {
         method: 'DELETE',
+        headers,
       });
 
       if (!response.ok) {
@@ -297,20 +190,21 @@ export default function Members() {
     }
   };
 
-  const getRoleBadgeColor = (role: MembershipRole) => {
-    switch (role) {
-      case 'owner':
-        return 'bg-purple-100 text-purple-800 border-purple-200';
-      case 'admin':
-        return 'bg-blue-100 text-blue-800 border-blue-200';
-      case 'member':
-        return 'bg-gray-100 text-gray-800 border-gray-200';
+  const getRoleBadgeColor = (role: string) => {
+    switch (role?.toUpperCase()) {
+      case 'OWNER':
+        return 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-300';
+      case 'ADMIN':
+        return 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300';
+      case 'MEMBER':
+        return 'bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-800 dark:text-gray-300';
       default:
         return 'bg-gray-100 text-gray-800';
     }
   };
 
   const formatDate = (dateString: string) => {
+    if (!dateString) return '-';
     return new Date(dateString).toLocaleDateString('en-IN', {
       day: 'numeric',
       month: 'short',
@@ -318,17 +212,17 @@ export default function Members() {
     });
   };
 
-  if (!currentOrganization) {
+  if (!activeWorkspace) {
     return (
       <div className="container mx-auto py-8 px-4">
         <Card>
           <CardContent className="py-10 text-center">
             <Users className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">
-              No Organization Selected
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
+              No Workspace Selected
             </h2>
             <p className="text-gray-500">
-              Please select or create an organization to manage members.
+              Please select a workspace to manage members.
             </p>
           </CardContent>
         </Card>
@@ -340,9 +234,9 @@ export default function Members() {
     <div className="container mx-auto py-8 px-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Team Members</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Team Members</h1>
           <p className="text-gray-500 mt-1">
-            Manage members and their roles for {currentOrganization.name}
+            Manage members and their roles for {activeWorkspace.name}
           </p>
         </div>
         
@@ -351,14 +245,14 @@ export default function Members() {
             <DialogTrigger asChild>
               <Button>
                 <UserPlus className="mr-2 h-4 w-4" />
-                Invite Member
+                Add Member
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Invite Team Member</DialogTitle>
+                <DialogTitle>Add Team Member</DialogTitle>
                 <DialogDescription>
-                  Send an invitation to join your organization. They will receive an email to accept the invitation.
+                  Enter the email address of the person you want to add to this workspace.
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
@@ -378,18 +272,18 @@ export default function Members() {
                   <label htmlFor="role" className="text-sm font-medium">
                     Role
                   </label>
-                  <Select value={inviteRole} onValueChange={(value) => setInviteRole(value as MembershipRole)}>
+                  <Select value={inviteRole} onValueChange={setInviteRole}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select a role" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="admin">
+                      <SelectItem value="ADMIN">
                         <div className="flex items-center">
                           <Shield className="mr-2 h-4 w-4" />
                           Admin
                         </div>
                       </SelectItem>
-                      <SelectItem value="member">
+                      <SelectItem value="MEMBER">
                         <div className="flex items-center">
                           <Users className="mr-2 h-4 w-4" />
                           Member
@@ -398,7 +292,7 @@ export default function Members() {
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-gray-500 mt-1">
-                    Admins can manage members and organization settings. Members can only access data.
+                    Admins can manage members and workspace settings. Members can only access data.
                   </p>
                 </div>
               </div>
@@ -410,12 +304,12 @@ export default function Members() {
                   {inviting ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Sending...
+                      Adding...
                     </>
                   ) : (
                     <>
-                      <Mail className="mr-2 h-4 w-4" />
-                      Send Invitation
+                      <UserPlus className="mr-2 h-4 w-4" />
+                      Add Member
                     </>
                   )}
                 </Button>
@@ -430,8 +324,8 @@ export default function Members() {
           <CardTitle>Members ({members.length})</CardTitle>
           <CardDescription>
             {isOwner 
-              ? 'You are the owner of this organization' 
-              : 'You can view members but only owners can manage them'}
+              ? 'You are the owner of this workspace' 
+              : `You are an ${myRole?.toLowerCase()} in this workspace`}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -442,11 +336,11 @@ export default function Members() {
           ) : members.length === 0 ? (
             <div className="text-center py-8">
               <Users className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-1">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-1">
                 No members yet
               </h3>
               <p className="text-gray-500">
-                Invite your first team member to get started.
+                Add your first team member to get started.
               </p>
             </div>
           ) : (
@@ -465,34 +359,34 @@ export default function Members() {
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <div className="h-10 w-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-medium">
-                          {member.profile?.full_name?.[0]?.toUpperCase() || 
-                           member.email?.[0]?.toUpperCase() || '?'}
+                          {member.user?.full_name?.[0]?.toUpperCase() || 
+                           member.user?.email?.[0]?.toUpperCase() || '?'}
                         </div>
                         <div>
-                          <div className="font-medium text-gray-900">
-                            {member.profile?.full_name || member.email?.split('@')[0] || 'Unknown'}
+                          <div className="font-medium text-gray-900 dark:text-gray-100">
+                            {member.user?.full_name || member.user?.email?.split('@')[0] || 'Unknown'}
                           </div>
                           <div className="text-sm text-gray-500">
-                            {member.email || member.profile?.email || 'No email'}
+                            {member.user?.email || 'No email'}
                           </div>
                         </div>
                       </div>
                     </TableCell>
                     <TableCell>
-                      {canManageMembers && member.role !== 'owner' ? (
+                      {canManageMembers && member.role !== 'OWNER' && member.user_id !== user?.id ? (
                         <Select 
                           value={member.role} 
-                          onValueChange={(value) => handleRoleChange(member.id, value as MembershipRole)}
+                          onValueChange={(value) => handleRoleChange(member.user_id, value)}
                         >
                           <SelectTrigger className={`w-28 ${getRoleBadgeColor(member.role)}`}>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="admin">
+                            <SelectItem value="ADMIN">
                               <Shield className="mr-2 h-4 w-4 inline" />
                               Admin
                             </SelectItem>
-                            <SelectItem value="member">
+                            <SelectItem value="MEMBER">
                               <Users className="mr-2 h-4 w-4 inline" />
                               Member
                             </SelectItem>
@@ -500,7 +394,7 @@ export default function Members() {
                         </Select>
                       ) : (
                         <Badge className={getRoleBadgeColor(member.role)}>
-                          {member.role.charAt(0).toUpperCase() + member.role.slice(1)}
+                          {member.role.charAt(0).toUpperCase() + member.role.slice(1).toLowerCase()}
                         </Badge>
                       )}
                     </TableCell>
@@ -508,7 +402,7 @@ export default function Members() {
                       {formatDate(member.created_at)}
                     </TableCell>
                     <TableCell className="text-right">
-                      {canManageMembers && member.role !== 'owner' && (
+                      {canManageMembers && member.role !== 'OWNER' && member.user_id !== user?.id && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" className="h-8 w-8 p-0">
@@ -517,14 +411,14 @@ export default function Members() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem 
-                              onClick={() => handleRoleChange(member.id, member.role === 'admin' ? 'member' : 'admin')}
+                              onClick={() => handleRoleChange(member.user_id, member.role === 'ADMIN' ? 'MEMBER' : 'ADMIN')}
                             >
                               <Shield className="mr-2 h-4 w-4" />
-                              Change to {member.role === 'admin' ? 'Member' : 'Admin'}
+                              Change to {member.role === 'ADMIN' ? 'Member' : 'Admin'}
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem 
-                              onClick={() => handleRemoveMember(member.id)}
+                              onClick={() => handleRemoveMember(member.user_id)}
                               className="text-red-600 focus:text-red-600"
                             >
                               <Trash2 className="mr-2 h-4 w-4" />

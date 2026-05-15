@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   Building2
 } from 'lucide-react';
+import { useActiveWorkspace } from '@/store/tenantStore';
 import { Button } from '@/components/ui/button';
 import { 
   Dialog, 
@@ -46,6 +47,7 @@ interface GSTR3BImportFlowProps {
 
 export default function GSTR3BImportFlow({ open, onOpenChange, onComplete }: GSTR3BImportFlowProps) {
   const { toast } = useToast();
+  const activeWorkspace = useActiveWorkspace();
   
   // State
   const [currentStep, setCurrentStep] = useState<ImportStep>('INITIAL');
@@ -81,12 +83,10 @@ export default function GSTR3BImportFlow({ open, onOpenChange, onComplete }: GST
     if (!uploadedFile) return;
     
     setIsUploading(true);
-    // Simulate parsing/processing
-    setTimeout(() => {
-      setFile(uploadedFile);
-      setIsUploading(false);
-      setCurrentStep('FILE_DETAILS');
-    }, 1500);
+    // Real processing would happen here
+    setFile(uploadedFile);
+    setIsUploading(false);
+    setCurrentStep('FILE_DETAILS');
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -130,14 +130,11 @@ export default function GSTR3BImportFlow({ open, onOpenChange, onComplete }: GST
     setCurrentStep('PROCESSING');
   };
 
-  // Trigger completion
   React.useEffect(() => {
     if (currentStep === 'PROCESSING') {
-      const timer = setTimeout(() => {
-        if (onComplete) onComplete();
-        onOpenChange(false);
-      }, 2500);
-      return () => clearTimeout(timer);
+      // Real ingestion would happen here
+      if (onComplete) onComplete();
+      onOpenChange(false);
     }
   }, [currentStep, onComplete, onOpenChange]);
 
@@ -294,7 +291,7 @@ export default function GSTR3BImportFlow({ open, onOpenChange, onComplete }: GST
         <div className="space-y-2">
           <label className="text-[13px] font-medium text-slate-700">1. File selected for import</label>
           <div className="flex items-center justify-between border rounded-md p-3 bg-white">
-            <span className="text-sm text-slate-600">{file?.name || 'Demo_Client_Sales_Data.xlsx'}</span>
+            <span className="text-sm text-slate-600">{file?.name || 'document.xlsx'}</span>
             <Button variant="ghost" size="icon" className="h-6 w-6 text-slate-400 hover:text-red-500" onClick={() => { setFile(null); setCurrentStep('UPLOAD'); }}>
               <Trash2 className="h-4 w-4" />
             </Button>
@@ -304,13 +301,13 @@ export default function GSTR3BImportFlow({ open, onOpenChange, onComplete }: GST
         {/* 2. Business */}
         <div className="space-y-2">
           <label className="text-[13px] font-medium text-slate-700">2. Business (PAN/GSTIN)</label>
-          <Select defaultValue="bauer">
+          <Select defaultValue="active">
             <SelectTrigger className="w-full text-left truncate">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="bauer" className="truncate max-w-[350px]">
-                Bauer Specialized Foundation Contractor India Private Limited: GSTIN - 07AADCB1626P1ZJ
+              <SelectItem value="active" className="truncate max-w-[350px]">
+                {activeWorkspace?.name || 'Workspace'}: GSTIN - {activeWorkspace?.gstins?.[0]?.gstin || 'No GSTIN'}
               </SelectItem>
             </SelectContent>
           </Select>
@@ -392,7 +389,7 @@ export default function GSTR3BImportFlow({ open, onOpenChange, onComplete }: GST
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <FileText className="h-4 w-4 text-slate-400" />
-                <span className="text-sm text-slate-700 font-medium">Demo_Client_Sales_Data.xlsx</span>
+                <span className="text-sm text-slate-700 font-medium">{file?.name || 'document.xlsx'}</span>
               </div>
               <span className="text-xs text-slate-500">{(file?.size ? (file.size / 1024).toFixed(0) : 5)} KB</span>
             </div>
@@ -402,7 +399,7 @@ export default function GSTR3BImportFlow({ open, onOpenChange, onComplete }: GST
                  <Building2 className="h-3 w-3 text-slate-400" />
               </div>
               <span className="text-sm text-slate-600 truncate flex-1">
-                Bauer Specialized Foundation Contractor India Private Limited GSTIN - 07AADCB1626P1ZJ
+                {activeWorkspace?.name || 'Workspace'} GSTIN - {activeWorkspace?.gstins?.[0]?.gstin || 'No GSTIN'}
               </span>
             </div>
 

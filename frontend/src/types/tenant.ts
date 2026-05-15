@@ -1,6 +1,10 @@
 export interface Workspace {
   id: string;
   name: string;
+  description?: string;
+  my_role?: string;
+  member_count?: number;
+  business_count?: number;
   created_at: string;
   updated_at: string;
 }

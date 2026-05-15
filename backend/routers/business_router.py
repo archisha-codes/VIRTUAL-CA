@@ -1,54 +1,21 @@
 from typing import List
-from uuid import UUID
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from database import get_db
-from api.dependencies import verify_workspace_access
+from api.dependencies import verify_workspace_access, get_current_user
 from api.schemas import BusinessCreate, BusinessResponse
-from models.tenant_models import Business
+from api.utils import get_state_from_gstin
+from models.tenant_models import Business, WorkspaceMember, User
 
-router = APIRouter(prefix="/workspaces/{workspace_id}/businesses", tags=["Businesses"])
+router = APIRouter(tags=["Businesses"])
 
-@router.post("/", response_model=BusinessResponse, status_code=status.HTTP_201_CREATED)
-def create_business(
-    workspace_id: UUID,
-    business_in: BusinessCreate,
-    db: Session = Depends(get_db),
-    _ = Depends(verify_workspace_access)
-):
-    """
-    Adds a new client business to the specified workspace.
-    Enforces tenant isolation by verifying workspace access via dependency.
-    """
-    new_business = Business(
-        workspace_id=workspace_id,
-        legal_name=business_in.legal_name,
-        trade_name=business_in.trade_name,
-        gstin=business_in.gstin,
-        pan=business_in.pan
-    )
-    db.add(new_business)
-    db.commit()
-    db.refresh(new_business)
-    return new_business
+# Note: /businesses CRUD is now handled by workspace_router.py
+# This file is kept for the businesses-with-gstins grouping endpoint only.
 
-@router.get("/", response_model=List[BusinessResponse])
-def list_businesses(
-    workspace_id: UUID,
-    db: Session = Depends(get_db),
-    _ = Depends(verify_workspace_access)
-):
-    """
-    Lists all client businesses within a workspace.
-    Enforces tenant isolation by verifying workspace access via dependency.
-    """
-    businesses = db.query(Business).filter(Business.workspace_id == workspace_id).all()
-    return businesses
-
-@router.get("-with-gstins")
+@router.get("/api/workspaces/{workspace_id}/businesses-with-gstins")
 def list_businesses_with_gstins(
-    workspace_id: UUID,
+    workspace_id: str,
     db: Session = Depends(get_db),
     _ = Depends(verify_workspace_access)
 ):
@@ -72,17 +39,16 @@ def list_businesses_with_gstins(
                 "gstins": []
             }
         
-        # Extract state from GSTIN (first 2 chars) if state is not in model
-        # The Business model has legal_name, trade_name, gstin, pan
-        # We'll use trade_name for state if it looks like one, or default
-        state = b.trade_name if b.trade_name else (b.gstin[:2] if len(b.gstin) >= 2 else "Unknown")
-        
         grouped[key]["gstins"].append({
             "id": str(b.id),
             "gstin": b.gstin,
-            "state": state,
-            "status": "Regular",
-            "isConnected": True, # For now default to true to allow filing
+            "legal_name": b.legal_name,
+            "trade_name": b.trade_name,
+            "state": get_state_from_gstin(b.gstin),
+            "status": "active",
+            "registration_type": "regular",
+            "category": "b2b",
+            "is_default": False,
             "lastVerified": b.updated_at.isoformat() if b.updated_at else None
         })
     
