@@ -47,7 +47,7 @@ class GSTR3BComputeRequest(BaseModel):
     itc_4b: Dict[str, Any] = {}
     nil_return: bool = False
     gstr2b_import_id: Optional[str] = None
-    workspace_id: Optional[UUID] = None
+    workspace_id: Optional[str] = None
     auto_save: bool = True
 
 class GSTR3BFileRequest(BaseModel):
@@ -65,7 +65,7 @@ async def get_gstr3b_state(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    await verify_workspace_access(workspace_id, db, current_user)
+    verify_workspace_access(workspace_id, current_user=current_user, db=db)
     
     business = db.query(Business).filter(
         Business.workspace_id == workspace_id,
@@ -94,7 +94,7 @@ async def save_gstr3b_state(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    await verify_workspace_access(request.workspace_id, db, current_user)
+    verify_workspace_access(request.workspace_id, current_user=current_user, db=db)
     
     business = db.query(Business).filter(
         Business.workspace_id == request.workspace_id,
@@ -142,7 +142,7 @@ async def delete_gstr3b_state(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    await verify_workspace_access(workspace_id, db, current_user)
+    verify_workspace_access(workspace_id, current_user=current_user, db=db)
     
     business = db.query(Business).filter(
         Business.workspace_id == workspace_id,
@@ -168,7 +168,7 @@ async def list_gstr3b_states(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    await verify_workspace_access(workspace_id, db, current_user)
+    verify_workspace_access(workspace_id, current_user=current_user, db=db)
     
     query = db.query(GSTR3B_Draft).join(Business).filter(
         Business.workspace_id == workspace_id
@@ -280,7 +280,7 @@ async def compute_gstr3b(
         # Auto-save draft if requested
         saved = False
         if request.auto_save and request.workspace_id:
-            await verify_workspace_access(request.workspace_id, db, current_user)
+            verify_workspace_access(request.workspace_id, current_user=current_user, db=db)
             business = db.query(Business).filter(
                 Business.workspace_id == request.workspace_id,
                 Business.gstin == request.gstin
@@ -342,7 +342,7 @@ async def get_gstr3b_section_state(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        await verify_workspace_access(workspace_id, db, current_user)
+        verify_workspace_access(workspace_id, current_user=current_user, db=db)
         
         data = {
             "gstin": gstin,
@@ -393,7 +393,7 @@ async def file_gstr3b(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        await verify_workspace_access(request.workspace_id, db, current_user)
+        verify_workspace_access(request.workspace_id, current_user=current_user, db=db)
         
         from india_compliance.gst_india.gstr3b_validation import validate_filing_eligibility
 

@@ -8,6 +8,18 @@ import io
 import tempfile
 import os
 from pathlib import Path
+import math
+
+def clean_float_data(data):
+    """Recursively clean NaN and Infinity from data structures so they are valid JSON."""
+    if isinstance(data, dict):
+        return {k: clean_float_data(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [clean_float_data(v) for v in data]
+    elif isinstance(data, float):
+        if math.isnan(data) or math.isinf(data):
+            return None
+    return data
 
 from database import get_db
 from api.dependencies import get_current_user, verify_workspace_access
@@ -30,7 +42,7 @@ async def get_gstr1_state(
     """
     Get saved GSTR-1 workflow state from database.
     """
-    await verify_workspace_access(workspace_id, db, current_user)
+    verify_workspace_access(workspace_id, current_user=current_user, db=db)
     
     business = db.query(Business).filter(
         Business.workspace_id == workspace_id,
@@ -77,7 +89,7 @@ async def save_gstr1_state(
     if not gstin or not return_period:
         raise HTTPException(status_code=400, detail="Missing gstin or return_period")
         
-    await verify_workspace_access(workspace_id, db, current_user)
+    verify_workspace_access(workspace_id, current_user=current_user, db=db)
     
     business = db.query(Business).filter(
         Business.workspace_id == workspace_id,
@@ -92,26 +104,40 @@ async def save_gstr1_state(
         GSTR1_Draft.return_period == return_period
     ).first()
     
-    current_step = request_body.get("current_step") or request_body.get("currentStep")
-    
-    if draft:
-        draft.payload = request_body
-        draft.current_step = current_step
-        draft.updated_at = datetime.utcnow()
-    else:
-        draft = GSTR1_Draft(
-            business_id=business.id,
-            return_period=return_period,
-            payload=request_body,
-            current_step=current_step
+    try:
+        current_step = request_body.get("current_step") or request_body.get("currentStep")
+        
+        # Defensive: Ensure payload is JSON-serializable (remove any NaN/Infinity from engine)
+        # This is a common cause of 500 errors when saving pandas-processed data to JSON columns
+        cleaned_body = clean_float_data(request_body)
+        payload_json = json.dumps(cleaned_body, default=str)
+        payload = json.loads(payload_json)
+        
+        if draft:
+            draft.payload = payload
+            draft.current_step = current_step
+            # SQLAlchemy handles updated_at via onupdate=func.now()
+        else:
+            draft = GSTR1_Draft(
+                business_id=business.id,
+                return_period=return_period,
+                payload=payload,
+                current_step=current_step
+            )
+            db.add(draft)
+        
+        db.commit()
+        return {
+            "success": True,
+            "message": "State saved successfully"
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error saving GSTR-1 state: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to save state: {str(e)}"
         )
-        db.add(draft)
-    
-    db.commit()
-    return {
-        "success": True,
-        "message": "State saved successfully"
-    }
 
 @router.put("/api/gstr1/state/tables")
 async def update_gstr1_tables(
@@ -134,7 +160,7 @@ async def update_gstr1_tables(
     if not gstin or not return_period or gstr1_tables is None:
         raise HTTPException(status_code=400, detail="Missing required fields")
         
-    await verify_workspace_access(workspace_id, db, current_user)
+    verify_workspace_access(workspace_id, current_user=current_user, db=db)
     
     business = db.query(Business).filter(
         Business.workspace_id == workspace_id,
@@ -149,34 +175,50 @@ async def update_gstr1_tables(
         GSTR1_Draft.return_period == return_period
     ).first()
     
-    if draft:
-        payload = dict(draft.payload)
-        payload["gstr1_tables"] = gstr1_tables
-        payload["last_saved"] = request_body.get("last_saved") or datetime.utcnow().isoformat()
-        draft.payload = payload
-        draft.updated_at = datetime.utcnow()
-    else:
-        # Create new if not exists
-        payload = {
-            "workspace_id": str(workspace_id),
-            "gstin": gstin,
-            "return_period": return_period,
-            "gstr1_tables": gstr1_tables,
-            "last_saved": request_body.get("last_saved") or datetime.utcnow().isoformat()
+    try:
+        if draft:
+            payload = dict(draft.payload)
+            payload["gstr1_tables"] = gstr1_tables
+            payload["last_saved"] = request_body.get("last_saved") or datetime.utcnow().isoformat()
+            
+            # Defensive sanitization
+            cleaned_payload = clean_float_data(payload)
+            payload_json = json.dumps(cleaned_payload, default=str)
+            draft.payload = json.loads(payload_json)
+        else:
+            # Create new if not exists
+            payload = {
+                "workspace_id": str(workspace_id),
+                "gstin": gstin,
+                "return_period": return_period,
+                "gstr1_tables": gstr1_tables,
+                "last_saved": request_body.get("last_saved") or datetime.utcnow().isoformat()
+            }
+            # Defensive sanitization
+            cleaned_payload = clean_float_data(payload)
+            payload_json = json.dumps(cleaned_payload, default=str)
+            sanitized_payload = json.loads(payload_json)
+            
+            draft = GSTR1_Draft(
+                business_id=business.id,
+                return_period=return_period,
+                payload=sanitized_payload,
+                current_step="review" # Default step if creating from tables
+            )
+            db.add(draft)
+        
+        db.commit()
+        return {
+            "success": True,
+            "message": "Tables updated successfully"
         }
-        draft = GSTR1_Draft(
-            business_id=business.id,
-            return_period=return_period,
-            payload=payload,
-            current_step="review" # Default step if creating from tables
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error updating GSTR-1 tables: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to update tables: {str(e)}"
         )
-        db.add(draft)
-    
-    db.commit()
-    return {
-        "success": True,
-        "message": "Tables updated successfully"
-    }
 
 @router.post("/api/gstr1/process")
 async def process_gstr1(
@@ -191,7 +233,7 @@ async def process_gstr1(
     """
     Process Excel file for GSTR-1 generation.
     """
-    await verify_workspace_access(workspace_id, db, current_user)
+    verify_workspace_access(workspace_id, current_user=current_user, db=db)
     
     try:
         # Step 1: Read Excel file

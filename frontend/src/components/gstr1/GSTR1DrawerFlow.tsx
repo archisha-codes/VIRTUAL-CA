@@ -167,6 +167,8 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
   const [isLoading, setIsLoading] = useState(false);
   const [otp, setOtp] = useState('');
   const [otpRequestId, setOtpRequestId] = useState<string>('');
+  const [gstinUsername, setGstinUsername] = useState('');
+  const [gstinPassword, setGstinPassword] = useState('');
   
   // Current drawer step
   const [currentDrawer, setCurrentDrawer] = useState<'business' | 'otp'>(initialDrawer);
@@ -438,6 +440,8 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
     setOtpStep('select');
     setSelectedGstinForOtp('');
     setOtp('');
+    setGstinUsername('');
+    setGstinPassword('');
   };
   
   // Get connected and unconnected GSTINs
@@ -618,7 +622,21 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
             </div>
             <div className="flex justify-between items-center mt-4">
               <div className="flex items-center gap-1 text-sm"><Building2 className="h-4 w-4" /> Multi GSTIN({totalGstins})</div>
-              <div className="text-sm text-slate-500">Feb 26</div>
+              <div className="text-sm text-slate-500">
+                {(() => {
+                  if (!returnPeriod) return '';
+                  if (returnPeriod.startsWith('Q')) {
+                    const quarters = ['', 'Q1 (Apr–Jun)', 'Q2 (Jul–Sep)', 'Q3 (Oct–Dec)', 'Q4 (Jan–Mar)'];
+                    const q = parseInt(returnPeriod[1]);
+                    const year = returnPeriod.slice(2);
+                    return `${quarters[q] ?? returnPeriod} ${year}`;
+                  }
+                  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                  const mm = parseInt(returnPeriod.slice(0, 2)) - 1;
+                  const yyyy = returnPeriod.slice(2);
+                  return `${months[mm] ?? ''} ${yyyy}`;
+                })()}
+              </div>
             </div>
           </DrawerHeader>
           
@@ -702,17 +720,28 @@ export default function GSTR1DrawerFlow({ open, onOpenChange, onContinue, initia
                   <div className="space-y-3">
                     <div>
                       <label className="block text-sm font-medium mb-1">Username / GSTIN</label>
-                      <Input placeholder="Enter username or GSTIN" />
+                      <Input
+                        placeholder="Enter username or GSTIN"
+                        value={gstinUsername}
+                        onChange={(e) => setGstinUsername(e.target.value)}
+                        autoComplete="username"
+                      />
                     </div>
                     <div>
                       <label className="block text-sm font-medium mb-1">Password</label>
-                      <Input type="password" placeholder="Enter password" />
+                      <Input
+                        type="password"
+                        placeholder="Enter password"
+                        value={gstinPassword}
+                        onChange={(e) => setGstinPassword(e.target.value)}
+                        autoComplete="current-password"
+                      />
                     </div>
                   </div>
                 </div>
                 <Button 
                   onClick={handleCredentialsSubmit}
-                  disabled={isLoading}
+                  disabled={isLoading || !gstinUsername.trim() || !gstinPassword.trim()}
                   className="w-full bg-blue-600 hover:bg-blue-700"
                 >
                   {isLoading ? (

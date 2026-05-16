@@ -37,7 +37,7 @@ async def get_dashboard_data(
         }
 
     # Verify membership
-    verify_workspace_access(workspace_id, current_user, db)
+    verify_workspace_access(workspace_id, current_user=current_user, db=db)
 
     # Get businesses in this workspace
     businesses = db.query(Business).filter(Business.workspace_id == workspace_id).all()
@@ -153,7 +153,7 @@ async def get_audit_logs(
     
     if workspace_id:
         # Verify access
-        verify_workspace_access(workspace_id, current_user, db)
+        verify_workspace_access(workspace_id, current_user=current_user, db=db)
         query = query.filter(AuditLog.workspace_id == workspace_id)
     
     logs = query.order_by(AuditLog.created_at.desc()).limit(limit).all()

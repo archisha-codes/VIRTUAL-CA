@@ -39,11 +39,7 @@ def get_invoices(
     """
     Get invoices for a workspace.
     """
-    # Verify access
-    # verify_workspace_access raises HTTPException if no access
-    # await verify_workspace_access(workspace_id, db, current_user) 
-    # Note: verify_workspace_access is async, but this route is sync. 
-    # I should check if I can make it async or if verify_workspace_access has a sync version.
+    verify_workspace_access(workspace_id, current_user=current_user, db=db)
     
     # For now, simple check
     business_ids = [b.id for b in db.query(Business).filter(Business.workspace_id == workspace_id).all()]

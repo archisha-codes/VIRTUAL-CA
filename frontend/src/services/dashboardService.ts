@@ -218,7 +218,7 @@ export function useDashboardService() {
             description: form.description,
             category: 'filing',
             icon: form.icon || 'file-text',
-            path: `/gst/forms/${form.id}`,
+            path: `/${form.id}`,
             due_date: form.due_date || '20th of next month',
             frequency: form.frequency || 'Monthly',
             enabled: form.status === 'active',

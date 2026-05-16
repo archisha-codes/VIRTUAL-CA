@@ -47,7 +47,8 @@ from routers import (
     gstr3b_router, 
     auth_router,
     dashboard_router,
-    invoice_router
+    invoice_router,
+    gstin_router
 )
 
 
@@ -106,6 +107,7 @@ app.include_router(dashboard_router.router)
 app.include_router(gstr1_router.router)
 app.include_router(gstr3b_router.router)
 app.include_router(invoice_router.router)
+app.include_router(gstin_router.router)
 
 @app.get("/health")
 async def health_check():

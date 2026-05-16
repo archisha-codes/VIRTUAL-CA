@@ -87,33 +87,44 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
     setIsLoadingData(true);
     try {
       // Try to load saved state from backend
-      const response = await getGstr1State(workspaceId, gstin, returnPeriod);
+      try {
+        const response = await getGstr1State(workspaceId, gstin, returnPeriod);
 
-      if (response.success && response.data) {
-        // Data exists - transform to table format
-        const savedState = response.data;
+        if (response.success && response.data) {
+          // Data exists - transform to table format
+          const savedState = response.data;
 
-        if (savedState.gstr1_tables || savedState.upload_result) {
-          const data = savedState.upload_result as unknown as GSTR1ProcessResponse;
-          if (data?.data) {
-            setUploadResult(data);
+          if (savedState.gstr1_tables || savedState.upload_result) {
+            const data = savedState.upload_result as unknown as GSTR1ProcessResponse;
+            if (data?.data) {
+              setUploadResult(data);
 
-            // Transform to business data format
-            const businessData = transformToBusinessData(data, gstin);
-            setBusinesses(businessData);
+              // Transform to business data format
+              const businessData = transformToBusinessData(data, gstin);
+              setBusinesses(businessData);
+            }
           }
-        }
 
-        if (savedState.last_saved) {
-          setLastSaved(new Date(savedState.last_saved));
+          if (savedState.last_saved) {
+            setLastSaved(new Date(savedState.last_saved));
+          }
+        } else {
+          // No saved data - show empty state
+          setBusinesses([]);
         }
-      } else {
-        // No saved data - show empty state
-        setBusinesses([]);
+      } catch (err: any) {
+        // If 404, just show empty state (normal case for new periods)
+        if (err.message?.includes('404')) {
+          setBusinesses([]);
+          setUploadResult(null);
+        } else {
+          // Re-throw other errors to be caught by the outer catch
+          throw err;
+        }
       }
     } catch (error) {
-      // Backend not available - gracefully handle without crashing
-      console.warn('Backend not available, showing empty state:', error);
+      // Backend not available or real error - gracefully handle without crashing
+      console.warn('Backend fetch error, showing empty state:', error);
       setBusinesses([]);
       setUploadResult(null);
     } finally {
