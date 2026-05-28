@@ -107,6 +107,7 @@ class GSTR1_Draft(Base):
     payload = Column(JSON, nullable=False)
     is_filed = Column(Boolean, default=False)
     current_step = Column(String(50), nullable=True)
+    version = Column(Integer, default=1, nullable=False)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -117,6 +118,56 @@ class GSTR1_Draft(Base):
     __table_args__ = (
         Index("idx_gstr1_draft_business_period", "business_id", "return_period"),
     )
+
+
+
+class GSTR1_Draft_Summary(Base):
+    __tablename__ = "gstr1_draft_summaries"
+    id = Column(String(36), primary_key=True, default=new_uuid)
+    draft_id = Column(String(36), ForeignKey("gstr1_drafts.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    total_records = Column(Integer, default=0)
+    total_taxable_value = Column(Numeric(18, 2), default=0.00)
+    total_igst = Column(Numeric(18, 2), default=0.00)
+    total_cgst = Column(Numeric(18, 2), default=0.00)
+    total_sgst = Column(Numeric(18, 2), default=0.00)
+    total_cess = Column(Numeric(18, 2), default=0.00)
+    
+    summary_data = Column(JSON, nullable=True)
+
+    draft = relationship("GSTR1_Draft", backref="summaries")
+
+
+class GSTR1_Draft_Invoice(Base):
+    __tablename__ = "gstr1_draft_invoices"
+    id = Column(String(36), primary_key=True, default=new_uuid)
+    draft_id = Column(String(36), ForeignKey("gstr1_drafts.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    category = Column(String(20), nullable=False, index=True)
+    record_hash = Column(String(64), nullable=False, index=True)
+    record_data = Column(JSON, nullable=False)
+    
+    is_valid = Column(Boolean, default=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    draft = relationship("GSTR1_Draft", backref="invoices")
+
+
+class GSTR1_Draft_Error(Base):
+    __tablename__ = "gstr1_draft_errors"
+    id = Column(String(36), primary_key=True, default=new_uuid)
+    draft_id = Column(String(36), ForeignKey("gstr1_drafts.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    error_code = Column(String(50), nullable=False)
+    message = Column(Text, nullable=False)
+    row_number = Column(Integer, nullable=True)
+    record_data = Column(JSON, nullable=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    draft = relationship("GSTR1_Draft", backref="errors")
 
 class Announcement(Base):
     __tablename__ = "announcements"

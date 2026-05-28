@@ -22,6 +22,31 @@ from india_compliance.gst_india.utils.gstr_1 import (
 )
 logger = get_logger(__name__)
 
+from pydantic import BaseModel, Field
+import hashlib
+import json
+
+class RecordError(BaseModel):
+    row: Optional[int] = None
+    error_code: str
+    message: str
+    record: Dict[str, Any] = Field(default_factory=dict)
+
+class ValidRecord(BaseModel):
+    category: str
+    record_hash: str
+    data: Dict[str, Any]
+
+class ProcessorResult(BaseModel):
+    valid_records: List[ValidRecord] = Field(default_factory=list)
+    error_records: List[RecordError] = Field(default_factory=list)
+    summary: Dict[str, Any] = Field(default_factory=dict)
+
+def calculate_row_hash(row_dict: Dict[str, Any]) -> str:
+    serialized = json.dumps(row_dict, sort_keys=True, default=str)
+    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+
+
 
 # GSTIN validation pattern
 GSTIN_PATTERN = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[0-9A-Z]{1}Z[0-9A-Z]{1}$")
@@ -998,11 +1023,11 @@ class GSTR1ExcelProcessor:
     def calculate_summary(self, data: Dict[str, List]) -> Dict[str, Any]:
         """Calculate GSTR-1 summary from processed data."""
         summary = {
-            "total_taxable_value": 0,
-            "total_igst": 0,
-            "total_cgst": 0,
-            "total_sgst": 0,
-            "total_cess": 0,
+            "total_taxable_value": 0.0,
+            "total_igst": 0.0,
+            "total_cgst": 0.0,
+            "total_sgst": 0.0,
+            "total_cess": 0.0,
             "total_invoices": 0,
             "b2b_count": 0,
             "b2cl_count": 0,
@@ -1010,70 +1035,78 @@ class GSTR1ExcelProcessor:
             "exp_count": 0,
             "cdnr_count": 0,
         }
-        
+
+        def _safe_float(val: Any) -> float:
+            """Convert Decimal or float to plain float, returning 0.0 on failure."""
+            try:
+                return float(val) if val is not None else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+
         # Process B2B invoices
         for invoice in data.get("b2b", []):
             for item in invoice.get("items", []):
-                summary["total_taxable_value"] += item["taxable_value"]
-                summary["total_igst"] += item["igst_amount"]
-                summary["total_cgst"] += item["cgst_amount"]
-                summary["total_sgst"] += item["sgst_amount"]
-                summary["total_cess"] += item["cess_amount"]
+                summary["total_taxable_value"] += _safe_float(item["taxable_value"])
+                summary["total_igst"] += _safe_float(item["igst_amount"])
+                summary["total_cgst"] += _safe_float(item["cgst_amount"])
+                summary["total_sgst"] += _safe_float(item["sgst_amount"])
+                summary["total_cess"] += _safe_float(item["cess_amount"])
             summary["total_invoices"] += 1
             summary["b2b_count"] += 1
-        
+
         # Process B2CL invoices
         for invoice in data.get("b2cl", []):
             for item in invoice.get("items", []):
-                summary["total_taxable_value"] += item["taxable_value"]
-                summary["total_igst"] += item["igst_amount"]
-                summary["total_cgst"] += item["cgst_amount"]
-                summary["total_sgst"] += item["sgst_amount"]
-                summary["total_cess"] += item["cess_amount"]
+                summary["total_taxable_value"] += _safe_float(item["taxable_value"])
+                summary["total_igst"] += _safe_float(item["igst_amount"])
+                summary["total_cgst"] += _safe_float(item["cgst_amount"])
+                summary["total_sgst"] += _safe_float(item["sgst_amount"])
+                summary["total_cess"] += _safe_float(item["cess_amount"])
             summary["total_invoices"] += 1
             summary["b2cl_count"] += 1
-        
+
         # Process B2CS entries (each row is an aggregate, not an individual invoice)
         for invoice in data.get("b2cs", []):
             for item in invoice.get("items", []):
-                summary["total_taxable_value"] += item["taxable_value"]
-                summary["total_igst"] += item["igst_amount"]
-                summary["total_cgst"] += item["cgst_amount"]
-                summary["total_sgst"] += item["sgst_amount"]
-                summary["total_cess"] += item["cess_amount"]
+                summary["total_taxable_value"] += _safe_float(item["taxable_value"])
+                summary["total_igst"] += _safe_float(item["igst_amount"])
+                summary["total_cgst"] += _safe_float(item["cgst_amount"])
+                summary["total_sgst"] += _safe_float(item["sgst_amount"])
+                summary["total_cess"] += _safe_float(item["cess_amount"])
             summary["total_invoices"] += 1
             summary["b2cs_count"] += 1
-        
+
         # Process Export invoices
         for invoice in data.get("export", []):
             for item in invoice.get("items", []):
-                summary["total_taxable_value"] += item["taxable_value"]
-                summary["total_igst"] += item["igst_amount"]
-                summary["total_cgst"] += item["cgst_amount"]
-                summary["total_sgst"] += item["sgst_amount"]
-                summary["total_cess"] += item["cess_amount"]
+                summary["total_taxable_value"] += _safe_float(item["taxable_value"])
+                summary["total_igst"] += _safe_float(item["igst_amount"])
+                summary["total_cgst"] += _safe_float(item["cgst_amount"])
+                summary["total_sgst"] += _safe_float(item["sgst_amount"])
+                summary["total_cess"] += _safe_float(item["cess_amount"])
             summary["total_invoices"] += 1
             summary["exp_count"] += 1
-        
+
         # Process CDNR invoices
         for invoice in data.get("cdnr", []):
             for item in invoice.get("items", []):
-                summary["total_taxable_value"] += item["taxable_value"]
-                summary["total_igst"] += item["igst_amount"]
-                summary["total_cgst"] += item["cgst_amount"]
-                summary["total_sgst"] += item["sgst_amount"]
-                summary["total_cess"] += item["cess_amount"]
+                summary["total_taxable_value"] += _safe_float(item["taxable_value"])
+                summary["total_igst"] += _safe_float(item["igst_amount"])
+                summary["total_cgst"] += _safe_float(item["cgst_amount"])
+                summary["total_sgst"] += _safe_float(item["sgst_amount"])
+                summary["total_cess"] += _safe_float(item["cess_amount"])
             summary["total_invoices"] += 1
             summary["cdnr_count"] += 1
-        
-        # Round values
+
+        # Round all numeric values to 2 decimal places
         for key in summary:
-            if isinstance(summary[key], float):
-                summary[key] = round(summary[key], 2)
-        
+            val = summary[key]
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                summary[key] = round(val, 2)
+
         return summary
     
-    def process_excel(self, file_content: bytes) -> Dict[str, Any]:
+    def process_excel(self, file_content: bytes) -> ProcessorResult:
         """
         Process Excel file and return GSTR-1 data with comprehensive validations.
         
@@ -1097,18 +1130,13 @@ class GSTR1ExcelProcessor:
             logger.error(f"Failed to read Excel file: {str(e)}")
             raise ValueError(f"Failed to read Excel file: {str(e)}")
         
-        result = {
-            "b2b": [],
-            "b2cl": [],
-            "b2cs": [],
-            "export": [],
-            "cdnr": [],
-            "cdnur": [],
-            "nil_exempt": [],
-            "summary": {},
-            "errors": [],
-            "warnings": [],
-            "validation_summary": {},
+        processor_result = ProcessorResult()
+        processed_hashes = set()
+        
+        # Keep old structure for calculate_summary
+        legacy_result = {
+            "b2b": [], "b2cl": [], "b2cs": [], "export": [],
+            "cdnr": [], "cdnur": [], "nil_exempt": []
         }
         
         # Number of summary rows to skip before header (in GST template)
@@ -1132,8 +1160,14 @@ class GSTR1ExcelProcessor:
                 # Skip any empty rows after header
                 df = df.dropna(how='all').reset_index(drop=True)
                 logger.info(f"Processing B2B sheet: {len(df)} rows (after skipping {SUMMARY_ROWS_TO_SKIP} summary rows)")
-                result["b2b"] = self.process_b2b_sheet(df)
-                logger.info(f"Processed {len(result['b2b'])} valid B2B invoices")
+                b2b_records = self.process_b2b_sheet(df)
+                legacy_result["b2b"] = b2b_records
+                for rec in b2b_records:
+                    rec_hash = calculate_row_hash(rec)
+                    if rec_hash not in processed_hashes:
+                        processed_hashes.add(rec_hash)
+                        processor_result.valid_records.append(ValidRecord(category="b2b", record_hash=rec_hash, data=rec))
+                logger.info(f"Processed {len(b2b_records)} valid B2B invoices")
             except Exception as e:
                 logger.error(f"Failed to process B2B sheet: {str(e)}")
                 self.warnings.append(f"Failed to process B2B sheet: {str(e)}")
@@ -1151,8 +1185,14 @@ class GSTR1ExcelProcessor:
                 df = pd.read_excel(excel_file, sheet_name=excel_file.sheet_names[b2cl_idx], header=SUMMARY_ROWS_TO_SKIP)
                 df = df.dropna(how='all').reset_index(drop=True)
                 logger.info(f"Processing B2CL sheet: {len(df)} rows")
-                result["b2cl"] = self.process_b2cl_sheet(df)
-                logger.info(f"Processed {len(result['b2cl'])} valid B2CL invoices")
+                b2cl_records = self.process_b2cl_sheet(df)
+                legacy_result["b2cl"] = b2cl_records
+                for rec in b2cl_records:
+                    rec_hash = calculate_row_hash(rec)
+                    if rec_hash not in processed_hashes:
+                        processed_hashes.add(rec_hash)
+                        processor_result.valid_records.append(ValidRecord(category="b2cl", record_hash=rec_hash, data=rec))
+                logger.info(f"Processed {len(b2cl_records)} valid B2CL invoices")
             except Exception as e:
                 logger.error(f"Failed to process B2CL sheet: {str(e)}")
                 self.warnings.append(f"Failed to process B2CL sheet: {str(e)}")
@@ -1170,8 +1210,14 @@ class GSTR1ExcelProcessor:
                 df = pd.read_excel(excel_file, sheet_name=excel_file.sheet_names[b2cs_idx], header=SUMMARY_ROWS_TO_SKIP)
                 df = df.dropna(how='all').reset_index(drop=True)
                 logger.info(f"Processing B2CS sheet: {len(df)} rows")
-                result["b2cs"] = self.process_b2cs_sheet(df)
-                logger.info(f"Processed {len(result['b2cs'])} valid B2CS entries")
+                b2cs_records = self.process_b2cs_sheet(df)
+                legacy_result["b2cs"] = b2cs_records
+                for rec in b2cs_records:
+                    rec_hash = calculate_row_hash(rec)
+                    if rec_hash not in processed_hashes:
+                        processed_hashes.add(rec_hash)
+                        processor_result.valid_records.append(ValidRecord(category="b2cs", record_hash=rec_hash, data=rec))
+                logger.info(f"Processed {len(b2cs_records)} valid B2CS entries")
             except Exception as e:
                 logger.error(f"Failed to process B2CS sheet: {str(e)}")
                 self.warnings.append(f"Failed to process B2CS sheet: {str(e)}")
@@ -1189,25 +1235,32 @@ class GSTR1ExcelProcessor:
                 df = pd.read_excel(excel_file, sheet_name=excel_file.sheet_names[exp_idx], header=SUMMARY_ROWS_TO_SKIP)
                 df = df.dropna(how='all').reset_index(drop=True)
                 logger.info(f"Processing Export sheet: {len(df)} rows")
-                result["export"] = self.process_export_sheet(df)
-                logger.info(f"Processed {len(result['export'])} valid Export invoices")
+                export_records = self.process_export_sheet(df)
+                legacy_result["export"] = export_records
+                for rec in export_records:
+                    rec_hash = calculate_row_hash(rec)
+                    if rec_hash not in processed_hashes:
+                        processed_hashes.add(rec_hash)
+                        processor_result.valid_records.append(ValidRecord(category="export", record_hash=rec_hash, data=rec))
+                logger.info(f"Processed {len(export_records)} valid Export invoices")
             except Exception as e:
                 logger.error(f"Failed to process Export sheet: {str(e)}")
                 self.warnings.append(f"Failed to process Export sheet: {str(e)}")
         
         # Calculate summary
-        result["summary"] = self.calculate_summary(result)
-        result["errors"] = self.errors
-        result["warnings"] = self.warnings
-        result["validation_summary"] = self.validator.get_validation_summary()
+        processor_result.summary = self.calculate_summary(legacy_result)
         
-        # Log summary
-        logger.info(f"Processing complete. Total invoices: {result['summary']['total_invoices']}")
-        logger.info(f"Total taxable value: {result['summary']['total_taxable_value']}")
-        logger.info(f"Validation errors: {result['validation_summary']['total_errors']}")
-        logger.info(f"Validation warnings: {result['validation_summary']['total_warnings']}")
-        
-        return result
+        # Populate errors
+        for err in self.validator.get_validation_summary().get("errors", []):
+            processor_result.error_records.append(RecordError(
+                row=err.get("row"),
+                error_code=err.get("error_code", "UNKNOWN"),
+                message=err.get("message", ""),
+                record={"field": err.get("field"), "value": err.get("value")}
+            ))
+            
+        logger.info(f"Processing complete. Valid records: {len(processor_result.valid_records)}, Error records: {len(processor_result.error_records)}")
+        return processor_result
     
     def get_validation_report(self) -> Dict[str, Any]:
         """Get comprehensive validation report."""
@@ -1255,4 +1308,5 @@ def process_gstr1_excel(file_content: bytes, company_gstin: str = "") -> Dict[st
         }
     """
     processor = GSTR1ExcelProcessor(company_gstin)
-    return processor.process_excel(file_content)
+    res = processor.process_excel(file_content)
+    return res.model_dump()

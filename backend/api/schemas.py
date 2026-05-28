@@ -115,3 +115,70 @@ class ConsolidatedMetricsResponse(BaseModel):
     period: str
     by_state: dict[str, StateMetric] = {}
     by_category: dict[str, StateMetric] = {}
+
+
+from typing import Dict, Any
+
+class GSTR1InvoiceResponse(BaseModel):
+    id: str
+    category: str
+    record_hash: str
+    record_data: Dict[str, Any]
+    is_valid: bool
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class GSTR1InvoiceUpdate(BaseModel):
+    category: str
+    record_data: Dict[str, Any]
+
+class GSTR1DraftSummaryResponse(BaseModel):
+    total_records: int
+    total_taxable_value: float
+    total_igst: float
+    total_cgst: float
+    total_sgst: float
+    total_cess: float
+    summary_data: Optional[Dict[str, Any]] = None
+
+    class Config:
+        from_attributes = True
+
+class GSTR1ErrorResponse(BaseModel):
+    id: str
+    error_code: str
+    message: str
+    row_number: Optional[int] = None
+    record_data: Optional[Dict[str, Any]] = None
+    
+    class Config:
+        from_attributes = True
+
+class GSTR1StateResponse(BaseModel):
+    id: str
+    return_period: str
+    current_step: Optional[str] = None
+    is_filed: bool
+    version: int = 1
+    summary: Optional[GSTR1DraftSummaryResponse] = None
+    invoices: List[GSTR1InvoiceResponse] = []
+    errors: List[GSTR1ErrorResponse] = []
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class GSTR1UploadResponse(BaseModel):
+    success: bool
+    draft_id: str
+    summary: Optional[GSTR1DraftSummaryResponse] = None
+    total_records: int
+    valid_count: int
+    error_count: int
+    data: Optional[Dict[str, Any]] = None
+
+class GSTR1DraftSaveRequest(BaseModel):
+    current_step: Optional[str] = None
+    gstr1_tables: Optional[Dict[str, Any]] = None

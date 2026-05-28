@@ -5,6 +5,7 @@ FastAPI routes for GSTR-1 JSON and GSTR-3B Excel file downloads.
 import json
 import io
 import xlsxwriter
+from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -260,8 +261,34 @@ async def download_gstr3b_excel(
     report = engine.validate_dataframe(df, company_gstin)
     df_corrected = engine.apply_corrections(df, report)
     
-    # 2. Convert Data
-    processed_records = df_corrected.to_dict('records')
+    # 2. Convert Data — re-cast Decimal columns after to_dict to avoid float leakage
+    _FINANCIAL_COLS = frozenset(
+        ("taxable_value", "igst", "cgst", "sgst", "cess", "invoice_value")
+    )
+
+    def _to_decimal_col(val: Any) -> Decimal:
+        if isinstance(val, Decimal):
+            return val
+        if val is None:
+            return Decimal("0.00")
+        try:
+            if pd.isna(val):
+                return Decimal("0.00")
+        except (TypeError, ValueError):
+            pass
+        try:
+            return Decimal(str(val)).quantize(Decimal("0.01"))
+        except (InvalidOperation, ValueError, TypeError):
+            return Decimal("0.00")
+
+    raw_records = df_corrected.to_dict('records')
+    fin_cols = [c for c in df_corrected.columns if c in _FINANCIAL_COLS]
+    processed_records = []
+    for rec in raw_records:
+        for col in fin_cols:
+            if col in rec:
+                rec[col] = _to_decimal_col(rec[col])
+        processed_records.append(rec)
     
     # 3. Generate Tables
     tables, gen_report = generate_gstr1_tables(

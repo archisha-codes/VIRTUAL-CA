@@ -83,14 +83,14 @@ const App = () => (
             {/* Public Routes */}
             <Route path="/" element={<LandingPage />} />
             <Route path="/auth" element={<Auth />} />
-            
+
             {/* Onboarding Route */}
             <Route path="/onboarding" element={
               <OnboardingRoute>
                 <Onboarding />
               </OnboardingRoute>
             } />
-            
+
             {/* Protected Routes */}
             <Route path="/dashboard" element={
               <ProtectedRoute>
@@ -128,7 +128,7 @@ const App = () => (
                 <GSTR1 />
               </ProtectedRoute>
             } />
-            
+
             {/* GSTR-1 Full Flow Routes */}
             <Route path="/gst/gstr1/prepare" element={
               <ProtectedRoute>

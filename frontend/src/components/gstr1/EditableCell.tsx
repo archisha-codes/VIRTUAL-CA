@@ -6,6 +6,14 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { cn } from '@/lib/utils';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { AlertCircle } from 'lucide-react';
+
 
 export interface EditableCellProps {
   value: string | number;
@@ -15,6 +23,7 @@ export interface EditableCellProps {
   validate?: (value: string | number) => string | null;
   disabled?: boolean;
   className?: string;
+  errorTooltip?: string | null;
 }
 
 export function EditableCell({
@@ -25,6 +34,7 @@ export function EditableCell({
   validate,
   disabled = false,
   className,
+  errorTooltip,
 }: EditableCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(String(value));
@@ -135,23 +145,46 @@ export function EditableCell({
     );
   }
 
-  return (
+  const displayValue = type === 'select' && options.length > 0
+    ? options.find((opt) => opt.value === value)?.label ?? String(value)
+    : String(value);
+
+  const displayError = error || errorTooltip;
+
+  const content = (
     <div
       onDoubleClick={handleDoubleClick}
       className={cn(
-        "px-2 py-1 rounded cursor-text",
+        "px-2 py-1 rounded cursor-text relative flex items-center justify-between group",
         !disabled && "hover:bg-slate-100 dark:hover:bg-slate-700",
         disabled && "cursor-not-allowed opacity-60",
-        error && "bg-red-50 dark:bg-red-900/20",
+        displayError ? "bg-red-50 dark:bg-red-900/20 ring-1 ring-red-500" : "",
         className
       )}
     >
-      {type === 'select' && options.length > 0
-        ? options.find((opt) => opt.value === value)?.label ?? String(value)
-        : String(value)
-      }
+      <span className="truncate">{displayValue}</span>
+      {displayError && (
+        <AlertCircle className="h-4 w-4 text-red-500 opacity-70 group-hover:opacity-100 flex-shrink-0 ml-1" />
+      )}
     </div>
   );
+
+  if (displayError && !isEditing) {
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {content}
+          </TooltipTrigger>
+          <TooltipContent className="bg-red-600 text-white border-red-700 font-medium">
+            <p>{displayError}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+
+  return content;
 }
 
 // Inline Editable Table Cell (for use in tables)

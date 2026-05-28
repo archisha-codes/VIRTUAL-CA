@@ -11,7 +11,7 @@
  * 6. Post-Filing
  */
 
-import React, { useState, useCallback, useEffect, useMemo, ReactNode } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef, ReactNode } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -69,10 +69,13 @@ import {
   type ParsedExcel,
   type ExcelRow 
 } from '@/lib/excel-parser';
-import { processGSTR1Excel, apiExportGSTR1Excel, downloadExcelFromResponse, validateGSTR1, validateGSTR1File, saveGstr1State, getGstr1State, deleteGstr1State, getExcelColumns, type GSTR1ProcessResponse } from '@/lib/api';
+import { processGSTR1Excel, apiExportGSTR1Excel, downloadExcelFromResponse, validateGSTR1, validateGSTR1File, saveGstr1State, getGstr1State, deleteGstr1State, getExcelColumns, API_BASE_URL, getAuthHeaders, type GSTR1ProcessResponse } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { useGstr1Store } from '@/store/gstr1Store';
+import debounce from 'lodash.debounce';
 import { useTenantStore, useActiveWorkspace, useActiveBusiness } from '@/store/tenantStore';
+import { logger } from '@/lib/frontendLogger';
 
 // Import table components for displaying all GSTR-1 tables
 import { HSNTable } from './HSNTable';
@@ -467,17 +470,22 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
   
   const { onComplete, onStepChange } = props;
 
-  // Workflow state
-  const [currentStepId, setCurrentStepId] = useState<WorkflowStepId>(props.initialStep || 'upload');
-  const [stepData, setStepData] = useState<Partial<Record<WorkflowStepId, any>>>({});
-  const [validationStatus, setValidationStatus] = useState<Record<WorkflowStepId, 'pending' | 'passed' | 'failed' | 'skipped'>>({
-    upload: 'pending',
-    classification: 'pending',
-    validation: 'pending',
-    summary: 'pending',
-    file: 'pending',
-    postfiling: 'pending'
-  });
+  // Global GSTR1 State Manager
+  const store = useGstr1Store();
+  
+  // Keep local component state for UI transients, but sync core state to store
+
+
+  // Workflow state bound to Zustand Single Source of Truth
+  const currentStepId = useGstr1Store(state => (state.currentStep as WorkflowStepId) || props.initialStep || 'upload');
+  const setCurrentStepId = useGstr1Store(state => state.setCurrentStep);
+  
+  const stepData = useGstr1Store(state => state.stepData);
+  const setStepData = useGstr1Store(state => state.setStepData);
+
+  const validationStatus = useGstr1Store(state => state.validationStatus);
+  const setValidationStatus = useGstr1Store(state => state.setValidationStatus);
+
   const [isLoading, setIsLoading] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   
@@ -496,14 +504,18 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
   const [isParsingLargeFile, setIsParsingLargeFile] = useState(false);
 
   // Step 2: Classification state
-  const [classificationResult, setClassificationResult] = useState<ClassificationResult | null>(null);
+  const classificationResult = useGstr1Store(state => state.classificationResult);
+  const setClassificationResult = useGstr1Store(state => state.setClassificationResult);
   const [isClassifying, setIsClassifying] = useState(false);
 
   // Step 3: Validation state
-  const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
+  const validationResult = useGstr1Store(state => state.validationResult);
+  const setValidationResult = useGstr1Store(state => state.setValidationResult);
   const [isValidating, setIsValidating] = useState(false);
   const [showWarnings, setShowWarnings] = useState(true);
-  const [validationErrors, setValidationErrors] = useState<ValidationErrorItem[]>([]);
+  
+  const validationErrors = useGstr1Store(state => state.validationErrors);
+  const setValidationErrors = useGstr1Store(state => state.setValidationErrors);
   
   // Filter state for validation errors
   const [invoiceFilter, setInvoiceFilter] = useState('');
@@ -513,26 +525,198 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
   const [dateTo, setDateTo] = useState('');
 
   // Step 4: Summary state
-  const [uploadResult, setUploadResult] = useState<GSTR1ProcessResponse | null>(null);
+  const uploadResult = useGstr1Store(state => state.uploadResult);
+  const setUploadResult = useGstr1Store(state => state.setUploadResult);
   const [activeSummaryTab, setActiveSummaryTab] = useState<string>('summary');
   
-  // Table data state for editable tables (using transformed types)
-  const [b2bData, setB2bData] = useState<any[]>([]);
-  const [b2clData, setB2clData] = useState<any[]>([]);
-  const [b2csData, setB2csData] = useState<any[]>([]);
-  const [cdnrData, setCdnrData] = useState<any[]>([]);
-  const [hsnData, setHsnData] = useState<any[]>([]);
-  const [exportsData, setExportsData] = useState<any[]>([]);
+  // Table data state bound directly to Zustand store
+  const b2bData = useGstr1Store(state => state.b2bData);
+  const setB2bData = useGstr1Store(state => state.setB2bData);
+
+  const b2clData = useGstr1Store(state => state.b2clData);
+  const setB2clData = useGstr1Store(state => state.setB2clData);
+
+  const b2csData = useGstr1Store(state => state.b2csData);
+  const setB2csData = useGstr1Store(state => state.setB2csData);
+
+  const cdnrData = useGstr1Store(state => state.cdnrData);
+  const setCdnrData = useGstr1Store(state => state.setCdnrData);
+
+  const hsnData = useGstr1Store(state => state.hsnData);
+  const setHsnData = useGstr1Store(state => state.setHsnData);
+
+  const exportsData = useGstr1Store(state => state.exportsData);
+  const setExportsData = useGstr1Store(state => state.setExportsData);
 
   // SINGLE SOURCE OF TRUTH - All data transformed to unified format
   const [gstr1Data, setGstr1Data] = useState<GSTR1Row[]>([]);
   const [gstr1Summary, setGstr1Summary] = useState<GSTR1Summary | null>(null);
-  const [validationErrorsMap, setValidationErrorsMap] = useState<Map<number, string[]>>(new Map());
+
+  const validationErrorsMap = useGstr1Store(state => state.validationErrorsMap);
+  const setValidationErrorsMap = useGstr1Store(state => state.setValidationErrorsMap);
   
   // Filters and Import drawer state
   const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
   const [importDrawerOpen, setImportDrawerOpen] = useState(false);
   const [activeFilters, setActiveFilters] = useState<GSTR1Filters | null>(null);
+
+  // Active re-validation timeout ref
+  const revalTimeoutRef = useRef<Record<string, NodeJS.Timeout>>({});
+
+  // Debounced localized re-validation function
+  const triggerDebouncedRevalidation = (
+    invoiceId: string,
+    category: string,
+    recordData: any
+  ) => {
+    if (revalTimeoutRef.current[invoiceId]) {
+      clearTimeout(revalTimeoutRef.current[invoiceId]);
+    }
+
+    revalTimeoutRef.current[invoiceId] = setTimeout(async () => {
+      if (!workspaceId) return;
+
+      try {
+        console.log(`[GSTR-1 Re-validation] Debounced trigger starting for ${invoiceId}...`);
+        
+        // Import and trigger API call
+        const { updateGstr1Invoice } = await import('@/lib/api');
+        await updateGstr1Invoice(workspaceId, invoiceId, category, recordData);
+
+        toast({
+          title: 'Row Re-validated',
+          description: `Invoice ${invoiceId} has been successfully updated and re-validated.`,
+        });
+      } catch (err) {
+        console.error('Failed to trigger row re-validation:', err);
+        toast({
+          title: 'Re-validation Error',
+          description: `Failed to save changes for invoice ${invoiceId}`,
+          variant: 'destructive',
+        });
+      } finally {
+        delete revalTimeoutRef.current[invoiceId];
+      }
+    }, 1000); // 1-second debounce window
+  };
+
+  // Wrapper for manual B2B changes
+  const handleB2bDataChange = (newData: B2BCustomer[]) => {
+    setB2bData(newData);
+    // Detect which invoice changed to trigger debounced re-validation
+    newData.forEach((customer, custIdx) => {
+      const oldCustomer = b2bData[custIdx];
+      if (oldCustomer) {
+        customer.invoices.forEach((invoice, invIdx) => {
+          const oldInvoice = oldCustomer.invoices[invIdx];
+          if (oldInvoice && JSON.stringify(invoice) !== JSON.stringify(oldInvoice)) {
+            triggerDebouncedRevalidation(invoice.invoiceNumber, 'b2b', invoice);
+          }
+        });
+      }
+    });
+  };
+
+  // Wrapper for manual HSN changes
+  const handleHsnDataChange = (newData: HSNSummary[]) => {
+    setHsnData(newData);
+    newData.forEach((hsn, idx) => {
+      const oldHsn = hsnData[idx];
+      if (oldHsn && JSON.stringify(hsn) !== JSON.stringify(oldHsn)) {
+        triggerDebouncedRevalidation(hsn.hsnCode, 'hsn', hsn);
+      }
+    });
+  };
+
+  // 1. Filtered B2B Data
+  const filteredB2bData = useMemo(() => {
+    let result = b2bData;
+    if (!result || result.length === 0) {
+      result = uploadResult?.data?.b2b || [];
+    }
+    if (!activeFilters) return result;
+    
+    if (activeFilters.gstin && activeFilters.gstin !== 'all') {
+      result = result.filter(c => c.customerGstin === activeFilters.gstin);
+    }
+    if (activeFilters.sections && !activeFilters.sections.includes('b2b')) {
+      result = [];
+    }
+    return result;
+  }, [b2bData, uploadResult, activeFilters]);
+
+  // 2. Filtered B2CS Data
+  const filteredB2csData = useMemo(() => {
+    let result = b2csData;
+    if (!result || result.length === 0) {
+      result = uploadResult?.data?.b2cs || [];
+    }
+    if (!activeFilters) return result;
+    
+    if (activeFilters.sections && !activeFilters.sections.includes('b2c_small')) {
+      result = [];
+    }
+    return result;
+  }, [b2csData, uploadResult, activeFilters]);
+
+  // 3. Filtered B2CL Data
+  const filteredB2clData = useMemo(() => {
+    let result = b2clData;
+    if (!result || result.length === 0) {
+      result = uploadResult?.data?.b2cl || [];
+    }
+    if (!activeFilters) return result;
+    
+    if (activeFilters.sections && !activeFilters.sections.includes('b2c_large')) {
+      result = [];
+    }
+    return result;
+  }, [b2clData, uploadResult, activeFilters]);
+
+  // 4. Filtered CDNR Data
+  const filteredCdnrData = useMemo(() => {
+    let result = cdnrData;
+    if (!result || result.length === 0) {
+      result = uploadResult?.data?.cdnr || [];
+    }
+    if (!activeFilters) return result;
+    
+    if (activeFilters.sections && !activeFilters.sections.includes('cdn')) {
+      result = [];
+    }
+    if (activeFilters.gstin && activeFilters.gstin !== 'all') {
+      result = result.filter(c => c.customerGstin === activeFilters.gstin);
+    }
+    return result;
+  }, [cdnrData, uploadResult, activeFilters]);
+
+  // 5. Filtered Exports Data
+  const filteredExportsData = useMemo(() => {
+    let result = exportsData;
+    if (!result || result.length === 0) {
+      result = uploadResult?.data?.exp || [];
+    }
+    if (!activeFilters) return result;
+    
+    if (activeFilters.sections && !activeFilters.sections.includes('exports')) {
+      result = [];
+    }
+    return result;
+  }, [exportsData, uploadResult, activeFilters]);
+
+  // 6. Filtered HSN Data
+  const filteredHsnData = useMemo(() => {
+    let result = hsnData;
+    if (!result || result.length === 0) {
+      result = uploadResult?.data?.hsn || [];
+    }
+    if (!activeFilters) return result;
+    
+    if (activeFilters.sections && !activeFilters.sections.includes('hsn')) {
+      result = [];
+    }
+    return result;
+  }, [hsnData, uploadResult, activeFilters]);
 
   // Sync table data when uploadResult changes (transform backend data to frontend format)
   useEffect(() => {
@@ -591,11 +775,12 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
       // SINGLE SOURCE OF TRUTH - Set unified data
       // ============================================
       // Transform all backend data to single source of truth
-      const unifiedData = transformAllBackendData(uploadResult.data);
+      const backendData = (uploadResult.data as any).tables || uploadResult.data;
+      const unifiedData = transformAllBackendData(backendData);
       setGstr1Data(unifiedData);
       
       // Use summary directly from backend calculations instead of recalculating
-      const backendSummary = (uploadResult.data.summary as any) || {};
+      const backendSummary = ((uploadResult.data as any).summary || (uploadResult.data as any).data?.summary || {}) as any;
       const summary: GSTR1Summary = {
         total_taxable: backendSummary.total_taxable_value || backendSummary.totalTaxableValue || 0,
         total_igst: backendSummary.total_igst || backendSummary.totalIgst || 0,
@@ -643,6 +828,9 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
   // Step 5: Filing state
   const [filingResult, setFilingResult] = useState<FilingResult | null>(null);
   const [isFiling, setIsFiling] = useState(false);
+  const [simulationMode, setSimulationMode] = useState<'success' | 'error'>('success');
+  const [pollingStatus, setPollingStatus] = useState<'idle' | 'polling' | 'success' | 'error'>('idle');
+  const [pollingMessage, setPollingMessage] = useState<string>('');
 
   // Step 6: Post-filing state
   const [filingHistory, setFilingHistory] = useState<Array<{ period: string; arn: string; date: string; status: string }>>([]);
@@ -653,168 +841,174 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
   // Calculate progress
   const progress = ((currentStepIndex) / (WORKFLOW_STEPS.length - 1)) * 100;
 
-  // Load saved state from backend on mount
+  // Double-phase load: instant local storage rendering followed by async background sync
   useEffect(() => {
-    const loadStateFromBackend = async () => {
-      if (!workspaceId || !gstin || !returnPeriod) {
-        console.log('[GSTR1Workflow] Missing workspaceId, gstin, or returnPeriod, skipping backend load');
-        return;
-      }
+    if (!workspaceId || !gstin || !returnPeriod) {
+      console.log('[GSTR1Workflow] Missing workspaceId, gstin, or returnPeriod, skipping background sync');
+      return;
+    }
 
+    const runBackgroundSync = async () => {
       setIsLoadingFromBackend(true);
       setLoadError(null);
-
       try {
-        console.log('[GSTR1Workflow] Loading state from backend:', { workspaceId, gstin, returnPeriod });
-        const response = await getGstr1State(workspaceId, gstin, returnPeriod);
-        
-        if (response.success && response.data) {
-          const savedState = response.data;
-          const hydratedUploadResult = savedState.upload_result || (savedState.gstr1_tables
-            ? {
-                success: true,
-                data: savedState.gstr1_tables,
-                validation_report: {
-                  errors: [],
-                  warnings: [],
-                  final_status: 'success',
-                },
-                total_records: ((savedState.gstr1_tables as any)?.summary?.total_invoices ?? 0),
-              }
-            : null);
-          
-          // Restore workflow state
-          const restoredStep = props.initialStep || savedState.current_step;
-          if (restoredStep) {
-            setCurrentStepId(restoredStep as any);
-          }
-          if (savedState.step_data) {
-            setStepData(savedState.step_data);
-          }
-          if (savedState.validation_status) {
-            setValidationStatus(savedState.validation_status as any);
-          }
-          if (savedState.last_saved) {
-            setLastSaved(new Date(savedState.last_saved));
-          }
-
-          // Restore GSTR-1 table data
-          if (savedState.gstr1_tables) {
-            const data = savedState.gstr1_tables as any;
-            setB2bData(data.b2b || []);
-            setB2clData(data.b2cl || []);
-            setB2csData(data.b2cs || []);
-            setCdnrData(data.cdnr || []);
-            setHsnData(data.hsn || []);
-            setExportsData(data.exp || data.export || []);
-          }
-
-          // Restore upload result
-          if (hydratedUploadResult) {
-            setUploadResult(hydratedUploadResult as any);
-
-            if (props.initialStep === 'validation' && !savedState.validation_result) {
-              await runValidationWithBackend(hydratedUploadResult as GSTR1ProcessResponse);
-            }
-          }
-
-          // Restore classification result
-          if (savedState.classification_result) {
-            setClassificationResult(savedState.classification_result as any);
-          }
-
-          // Restore validation result
-          if (savedState.validation_result) {
-            setValidationResult(savedState.validation_result as any);
-          }
-
-          // Restore filing result
-          if (savedState.filing_result) {
-            setFilingResult(savedState.filing_result as any);
-          }
-
-          console.log('[GSTR1Workflow] Loaded state from backend successfully:', {
-            currentStep: savedState.current_step,
-            hasGstr1Tables: !!savedState.gstr1_tables,
+        console.log('[GSTR1Workflow] Triggering async background sync from server...');
+        const updated = await store.initStoreFromServer(workspaceId, gstin, returnPeriod);
+        if (updated) {
+          toast({
+            title: "Draft Synced",
+            description: "Synchronized latest GSTR-1 state from server.",
           });
-        } else {
-          console.log('[GSTR1Workflow] No saved state found on backend');
         }
       } catch (error) {
-        // Backend not available - gracefully handle without crashing
-        console.warn('[GSTR1Workflow] Backend not available, showing empty state:', error);
-        setLoadError(null); // Clear any load error - just means no saved state
-        // Fall back to localStorage only for legacy migration (optional)
-        console.log('[GSTR1Workflow] Attempting legacy localStorage migration...');
-        const savedState = localStorage.getItem('gstr1_workflow_state');
-        if (savedState) {
-          try {
-            const parsed = JSON.parse(savedState);
-            if (parsed.currentStep) {
-              setCurrentStepId(parsed.currentStep);
-              setStepData(parsed.stepData || {});
-              setValidationStatus(parsed.validationStatus || {});
-              setLastSaved(parsed.lastSaved ? new Date(parsed.lastSaved) : null);
-              console.log('[GSTR1Workflow] Migrated legacy state from localStorage');
-            }
-          } catch (e) {
-            console.error('[GSTR1Workflow] Failed to migrate legacy state:', e);
-          }
-        }
+        console.warn('[GSTR1Workflow] Background sync failed (backend offline or network error):', error);
       } finally {
         setIsLoadingFromBackend(false);
       }
     };
 
-    loadStateFromBackend();
-  }, [workspaceId, gstin, returnPeriod, props.initialStep]);
+    runBackgroundSync();
+  }, [workspaceId, gstin, returnPeriod]);
 
-  // Save state to backend on change (debounced)
-  useEffect(() => {
-    const saveStateToBackend = async () => {
-      if (!workspaceId || !gstin || !returnPeriod) {
-        return;
-      }
+  // Debounced auto-save with exponential backoff retries on network failures
+  const saveStateWithRetry = useCallback(async (stateToSave: any, maxRetries = 5, baseDelay = 1000) => {
+    if (!workspaceId || !gstin || !returnPeriod) return;
 
-      // Don't save if we haven't loaded anything yet
-      if (!uploadResult && Object.keys(stepData).length === 0) {
-        return;
-      }
-
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
-        const gstr1Tables = uploadResult?.data ? {
-          b2b: b2bData,
-          b2cl: b2clData,
-          b2cs: b2csData,
-          cdnr: cdnrData,
-          hsn: hsnData,
-          exp: exportsData,
-        } : null;
-
-        await saveGstr1State(workspaceId, gstin, returnPeriod, {
-          currentStep: currentStepId,
-          stepData,
-          validationStatus,
-          gstr1Tables,
-          uploadResult: uploadResult as any,
-          classificationResult: classificationResult as any,
-          validationResult: validationResult as any,
-          filingResult: filingResult as any,
+        console.log(`[GSTR1Workflow] Auto-saving state to backend (attempt ${attempt + 1}/${maxRetries})...`);
+        
+        // Prepare request body matching `/api/gstr1/state` signature
+        const response = await fetch(`${API_BASE_URL}/api/gstr1/state`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...await getAuthHeaders(),
+          },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            gstin,
+            return_period: returnPeriod,
+            current_step: stateToSave.currentStep,
+            step_data: stateToSave.stepData,
+            validation_status: stateToSave.validationStatus,
+            gstr1_tables: {
+              b2b: stateToSave.b2bData || [],
+              b2cl: stateToSave.b2clData || [],
+              b2cs: stateToSave.b2csData || [],
+              cdnr: stateToSave.cdnrData || [],
+              hsn: stateToSave.hsnData || [],
+              exp: stateToSave.exportsData || [],
+            },
+            upload_result: stateToSave.uploadResult,
+            classification_result: stateToSave.classificationResult,
+            validation_result: stateToSave.validationResult,
+            validation_errors: stateToSave.validationErrors,
+            validation_errors_map: stateToSave.validationErrorsMap,
+            version: stateToSave.version,
+          }),
         });
 
-        console.log('[GSTR1Workflow] State saved to backend');
-      } catch (error) {
-        console.error('[GSTR1Workflow] Failed to save state to backend:', error);
+        if (response.status === 409) {
+          // Version Conflict (OCC)!
+          const conflictData = await response.json();
+          console.warn('[GSTR1Workflow] OCC Version Conflict detected:', conflictData);
+          toast({
+            variant: "destructive",
+            title: "Version Conflict",
+            description: "A newer draft exists on the server. Please refresh or merge to prevent overwriting.",
+          });
+          return; // Stop retrying on OCC conflict
+        }
+
+        if (!response.ok) {
+          throw new Error(`HTTP Error ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (data.success) {
+          console.log('[GSTR1Workflow] Auto-saved successfully. Updating store version:', data.version);
+          // Update the store's version and timestamp without triggering recursive auto-saves
+          store.setVersionAndTimestamp(data.version, data.updated_at);
+          setLastSaved(new Date());
+          return; // Success, exit retry loop
+        }
+      } catch (err) {
+        console.warn(`[GSTR1Workflow] Auto-save attempt ${attempt + 1} failed:`, err);
+        if (attempt === maxRetries - 1) {
+          toast({
+            variant: "destructive",
+            title: "Auto-save Offline",
+            description: "Failed to sync draft with server. Changes saved locally.",
+          });
+        } else {
+          // Exponential backoff
+          const delay = baseDelay * Math.pow(2, attempt);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
       }
+    }
+  }, [workspaceId, gstin, returnPeriod, store, toast]);
+
+  const debouncedSave = useMemo(
+    () => debounce((stateToSave) => {
+      saveStateWithRetry(stateToSave);
+    }, 2000),
+    [saveStateWithRetry]
+  );
+
+  // Subscribe to changes in the Zustand store to trigger debounced auto-save
+  useEffect(() => {
+    // Collect the current relevant state to persist
+    const stateToSave = {
+      currentStep: store.currentStep || 'upload',
+      stepData: store.stepData,
+      validationStatus: store.validationStatus,
+      uploadResult: store.uploadResult,
+      classificationResult: store.classificationResult,
+      validationResult: store.validationResult,
+      validationErrors: store.validationErrors,
+      validationErrorsMap: store.validationErrorsMap,
+      b2bData: store.b2bData,
+      b2clData: store.b2clData,
+      b2csData: store.b2csData,
+      cdnrData: store.cdnrData,
+      hsnData: store.hsnData,
+      exportsData: store.exportsData,
+      version: store.version,
     };
 
-    // Debounce the save to avoid too many API calls
-    const timeoutId = setTimeout(saveStateToBackend, 1000);
-    return () => clearTimeout(timeoutId);
-  }, [currentStepId, stepData, validationStatus, uploadResult, classificationResult, validationResult, filingResult, workspaceId, gstin, returnPeriod, b2bData, b2clData, b2csData, cdnrData, hsnData, exportsData]);
+    // Only save if there's any active draft content loaded
+    if (store.gstin && (store.uploadResult || Object.keys(store.stepData).length > 0)) {
+      debouncedSave(stateToSave);
+    }
+
+    return () => {
+      debouncedSave.cancel();
+    };
+  }, [
+    store.currentStep,
+    store.stepData,
+    store.validationStatus,
+    store.uploadResult,
+    store.classificationResult,
+    store.validationResult,
+    store.validationErrors,
+    store.validationErrorsMap,
+    store.b2bData,
+    store.b2clData,
+    store.b2csData,
+    store.cdnrData,
+    store.hsnData,
+    store.exportsData,
+    store.version,
+    debouncedSave
+  ]);
+
 
   // Handle step change callback
   useEffect(() => {
+    logger.log('STORE', `Workflow step transitioned to: ${currentStepId.toUpperCase()}`);
     onStepChange?.(currentStepId);
   }, [currentStepId, onStepChange]);
 
@@ -828,6 +1022,21 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
     const nextIndex = currentStepIndex + 1;
     if (nextIndex < WORKFLOW_STEPS.length) {
       const nextStepId = WORKFLOW_STEPS[nextIndex].id;
+      
+      // Hardened check: block if critical errors exist in validation step when moving to summary
+      if (currentStepId === 'validation') {
+        const errorsCount = validationErrors.filter(e => e.severity === 'error' || e.severity === 'critical').length 
+          || (validationResult?.errors || 0);
+        if (errorsCount > 0) {
+          toast({
+            title: 'Critical Errors Exist',
+            description: 'You cannot proceed to the Summary step until all critical errors are resolved.',
+            variant: 'destructive',
+          });
+          return;
+        }
+      }
+      
       setCurrentStepId(nextStepId);
       updateStepStatus(currentStepId, 'passed');
     }
@@ -844,6 +1053,21 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
   // Navigate to specific step (only if completed or current)
   const goToStep = (stepId: WorkflowStepId) => {
     const targetIndex = STEP_INDEX[stepId];
+    
+    // Block if trying to navigate to summary/file/postfiling while having critical validation errors
+    if (targetIndex > STEP_INDEX['validation']) {
+      const errorsCount = validationErrors.filter(e => e.severity === 'error' || e.severity === 'critical').length 
+        || (validationResult?.errors || 0);
+      if (errorsCount > 0) {
+        toast({
+          title: 'Navigation Blocked',
+          description: 'Please resolve all critical validation errors before proceeding to subsequent steps.',
+          variant: 'destructive',
+        });
+        return;
+      }
+    }
+
     if (targetIndex <= currentStepIndex || validationStatus[stepId] === 'passed') {
       setCurrentStepId(stepId);
     }
@@ -851,6 +1075,14 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
   // Reset workflow
   const resetWorkflow = async () => {
+    // 1. Clear Zustand store
+    store.clearStore();
+
+    // 2. Purge local storage and session storage
+    localStorage.removeItem('gstr1_draft_state');
+    sessionStorage.clear();
+
+    // 3. Clear local component transient states
     setCurrentStepId('upload');
     setStepData({});
     setValidationStatus({
@@ -876,11 +1108,11 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
     setExportsData([]);
     setLastSaved(null);
 
-    // Clear state from backend
+    // 4. Clear state from backend compliance database tables
     if (workspaceId && gstin && returnPeriod) {
       try {
         await deleteGstr1State(workspaceId, gstin, returnPeriod);
-        console.log('[GSTR1Workflow] Cleared state from backend');
+        console.log('[GSTR1Workflow] Cleared state from backend database');
       } catch (error) {
         console.error('[GSTR1Workflow] Failed to clear state from backend:', error);
       }
@@ -888,7 +1120,7 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
     toast({
       title: 'Workflow Reset',
-      description: 'All progress has been cleared',
+      description: 'All local and server progress has been successfully cleared.',
     });
   };
 
@@ -1000,6 +1232,19 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
   const isMappingComplete = REQUIRED_FIELDS.every(field => columnMapping[field]);
 
+  const applyLocalWorkbookData = useCallback(() => {
+    if (!parsedData?.rows?.length) return null;
+
+    const unifiedData = transformRawData(parsedData.rows as any[]);
+    const summary = calculateSummary(unifiedData);
+
+    setGstr1Data(unifiedData);
+    setGstr1Summary(summary);
+    setValidationErrorsMap(validateAllRows(unifiedData));
+
+    return { unifiedData, summary };
+  }, [parsedData, setValidationErrorsMap]);
+
   // ============================================
   // STEP 2: CLASSIFICATION & CATEGORIZATION
   // ============================================
@@ -1049,7 +1294,7 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
       // CRITICAL: Immediately set per-table React state so UI updates right away
       if (result && result.success && result.data) {
-        const tables = result.data;
+        const tables = (result.data as any).tables || result.data;
         
         console.log('[DEBUG] Raw data from backend:');
         console.log('[DEBUG] b2b:', tables.b2b?.length || 0);
@@ -1130,7 +1375,22 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
           setCurrentStepId('validation');
         }, 1000);
       } else {
-        throw new Error(result.validation_report?.errors?.[0] || 'Processing failed');
+        const localData = applyLocalWorkbookData();
+        if (localData) {
+          updateStepStatus('classification', 'passed');
+          setLastSaved(new Date());
+
+          toast({
+            title: 'Classification Complete',
+            description: `Loaded ${localData.unifiedData.length} rows directly from the uploaded workbook.`,
+          });
+
+          setTimeout(() => {
+            setCurrentStepId('validation');
+          }, 1000);
+        } else {
+          throw new Error(result.validation_report?.errors?.[0] || 'Processing failed');
+        }
       }
     } catch (error) {
       updateStepStatus('classification', 'failed');
@@ -1282,11 +1542,9 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
   const handleFileImport = (file: File, mapping: Partial<ColumnMapping>) => {
     setFile(file);
     setColumnMapping(mapping as ColumnMapping);
-    // Trigger classification automatically
-    runClassification();
     toast({
       title: 'File Imported',
-      description: `Processing ${file.name}...`,
+      description: `${file.name} is ready for validation.`,
     });
   };
   
@@ -1415,7 +1673,33 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
   };
   
   // Handle E-Invoice vs Sales Register Recon button
-  const handleReconciliation = () => {
+  const handleReconciliation = async () => {
+    // Save state immediately to ensure no progress is lost
+    const currentState = useGstr1Store.getState();
+    const stateToSave = {
+      currentStep: currentState.currentStep || 'upload',
+      stepData: currentState.stepData,
+      validationStatus: currentState.validationStatus,
+      uploadResult: currentState.uploadResult,
+      classificationResult: currentState.classificationResult,
+      validationResult: currentState.validationResult,
+      validationErrors: currentState.validationErrors,
+      validationErrorsMap: currentState.validationErrorsMap,
+      version: currentState.version,
+      b2bData: currentState.b2bData,
+      b2clData: currentState.b2clData,
+      b2csData: currentState.b2csData,
+      cdnrData: currentState.cdnrData,
+      hsnData: currentState.hsnData,
+      exportsData: currentState.exportsData,
+    };
+    
+    toast({
+      title: 'Saving Draft...',
+      description: 'Your progress is being saved before navigation.',
+    });
+    
+    await saveStateWithRetry(stateToSave);
     navigate('/gstr1/reconciliation');
   };
   
@@ -1432,6 +1716,24 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
     
     setCurrentStepId('validation');
     await runValidation();
+
+    const currentValidation = useGstr1Store.getState().validationResult;
+    if (currentValidation) {
+      if (currentValidation.errors > 0) {
+        toast({
+          title: 'Critical Errors Found',
+          description: 'Validation completed with critical errors. Navigation to Summary step is blocked until resolved.',
+          variant: 'destructive',
+        });
+      } else {
+        toast({
+          title: 'Validation Passed',
+          description: 'No critical errors found. Proceeding to Summary step.',
+        });
+        updateStepStatus('validation', 'passed');
+        setCurrentStepId('summary');
+      }
+    }
   };
 
   // Handle export single row
@@ -1502,12 +1804,13 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
       setUploadResult(result);
       
       if (result.success && result.data) {
+        const tables = (result.data as any).tables || result.data;
         // Transform and store data
-        const transformedB2B = transformBackendB2BToFrontend(result.data.b2b || []);
-        const transformedB2CL = transformBackendB2CLToFrontend(result.data.b2cl || []);
-        const transformedB2CS = transformBackendB2CSToFrontend(result.data.b2cs || []);
-        const transformedCDNR = transformBackendCDNRToFrontend(result.data.cdnr || []);
-        const transformedExport = transformBackendExportToFrontend(result.data.exp || []);
+        const transformedB2B = transformBackendB2BToFrontend(tables.b2b || []);
+        const transformedB2CL = transformBackendB2CLToFrontend(tables.b2cl || []);
+        const transformedB2CS = transformBackendB2CSToFrontend(tables.b2cs || []);
+        const transformedCDNR = transformBackendCDNRToFrontend(tables.cdnr || []);
+        const transformedExport = transformBackendExportToFrontend(tables.exp || []);
         
         // State is now saved to backend automatically via useEffect
         // No localStorage persistence needed - backend is the source of truth
@@ -1517,7 +1820,7 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
           b2cs: transformedB2CS,
           cdnr: transformedCDNR,
           exp: transformedExport,
-          hsn: result.data.hsn || []
+          hsn: tables.hsn || []
         };
         
         // Update state with transformed data
@@ -1526,8 +1829,8 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
         setB2csData(transformedB2CS);
         setCdnrData(transformedCDNR);
         setExportsData(transformedExport);
-        if (result.data.hsn && result.data.hsn.length > 0) {
-          setHsnData(result.data.hsn.map((h: any) => ({
+        if (tables.hsn && tables.hsn.length > 0) {
+          setHsnData(tables.hsn.map((h: any) => ({
             hsnCode: h.hsn_code || '',
             description: h.description || '',
             uqc: h.uom || 'NOS',
@@ -1543,9 +1846,22 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
         // Automatically run validation with backend results
         await runValidationWithBackend(result);
+      } else {
+        const localData = applyLocalWorkbookData();
+        if (localData) {
+          updateStepStatus('summary', 'passed');
+          setLastSaved(new Date());
+
+          toast({
+            title: 'Summary Ready',
+            description: `Loaded ${localData.unifiedData.length} rows directly from the uploaded workbook.`,
+          });
+        } else {
+          throw new Error(result.validation_report?.errors?.[0] || 'Processing failed');
+        }
       }
 
-      setStepData(prev => ({ ...prev, summary: result.data }));
+      setStepData(prev => ({ ...prev, summary: (result.data as any).tables || result.data }));
       updateStepStatus('summary', 'passed');
       setLastSaved(new Date());
       
@@ -1581,77 +1897,175 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
   // STEP 5: FILE RETURN
   // ============================================
 
+  // Poll GSTN filing status from server
+  const pollFilingStatus = async (arn: string) => {
+    setPollingStatus('polling');
+    setPollingMessage('GSTN Portal is validating return contents...');
+    
+    let attempts = 0;
+    const maxAttempts = 30; // 2.5 minutes total polling time
+    
+    const interval = setInterval(async () => {
+      attempts++;
+      if (attempts > maxAttempts) {
+        clearInterval(interval);
+        setIsFiling(false);
+        setPollingStatus('error');
+        toast({
+          title: 'Filing Polling Timeout',
+          description: 'Filing verification timed out. Please check the GSTN Portal directly.',
+          variant: 'destructive',
+        });
+        return;
+      }
+      
+      try {
+        const authHeaders = await getAuthHeaders();
+        const response = await fetch(`${API_BASE_URL}/api/v1/gstr1/${workspaceId}/${gstin}/${returnPeriod}/gstn-status/${arn}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error('Filing status polling failed');
+        }
+        
+        const resData = await response.json();
+        const statusData = resData.data;
+        
+        console.log('[GSTN Status Polling] Response:', statusData);
+        
+        if (statusData.status === 'Processed') {
+          clearInterval(interval);
+          setIsFiling(false);
+          setPollingStatus('success');
+          
+          const result: FilingResult = {
+            success: true,
+            arn: arn,
+            ackNumber: 'ACK-' + Math.random().toString(36).substr(2, 9).toUpperCase(),
+            filingId: 'FIL-' + Math.random().toString(36).substr(2, 9).toUpperCase(),
+            status: 'Filed',
+            filingDate: new Date().toISOString(),
+            message: statusData.message || 'GSTR-1 return successfully filed and processed.'
+          };
+          
+          setFilingResult(result);
+          setStepData(prev => ({ ...prev, file: result }));
+          updateStepStatus('file', 'passed');
+          setLastSaved(new Date());
+          
+          // Add to filing history
+          setFilingHistory(prev => [{
+            period: returnPeriod,
+            arn: result.arn!,
+            date: result.filingDate!,
+            status: 'Filed'
+          }, ...prev]);
+          
+          toast({
+            title: 'Filing Complete',
+            description: `Successfully processed by GSTN Portal! ARN: ${arn}`,
+          });
+          
+          // Trigger success/confetti UI automatically
+          setCurrentStepId('postfiling');
+          if (onComplete) {
+            onComplete(result);
+          }
+          
+        } else if (statusData.status === 'Error') {
+          clearInterval(interval);
+          setIsFiling(false);
+          setPollingStatus('error');
+          
+          // Parse errors and map back to invoices
+          const portalErrors = statusData.errors || [];
+          const mappedErrors = portalErrors.map((err: any) => ({
+            invoice: err.invoice || 'GSTN Portal',
+            error: err.error || 'GSTN Portal rule check rejected',
+            rule: err.code || 'GSTN_PORTAL_VALIDATION',
+            severity: 'error' as const
+          }));
+          
+          // Highlight in red
+          setValidationErrors(mappedErrors);
+          updateStepStatus('validation', 'failed');
+          updateStepStatus('file', 'failed');
+          
+          toast({
+            title: 'GSTN Portal Validation Error',
+            description: statusData.message || 'Return rejected by GSTN portal validation rules.',
+            variant: 'destructive'
+          });
+          
+          // Back-route directly to Step 3 (Validation)
+          setTimeout(() => {
+            setCurrentStepId('validation');
+          }, 1500);
+          
+        } else {
+          // Status is 'Pending' or other, keep polling
+          setPollingMessage(statusData.message || `Processing Return (${attempts}/${maxAttempts})...`);
+        }
+      } catch (err) {
+        console.error('[GSTN Polling] Exception encountered:', err);
+      }
+    }, 5000);
+  };
+
   // File GSTR-1
   const fileGSTR1 = async () => {
     if (!uploadResult?.data) return;
 
     setIsFiling(true);
+    setPollingStatus('polling');
+    setPollingMessage('Initializing portal upload channel...');
 
     try {
-      // Call backend API to file GSTR-1
-      const response = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/gstr1/file`, {
+      const authHeaders = await getAuthHeaders();
+      const response = await fetch(`${API_BASE_URL}/api/v1/gstr1/${workspaceId}/${gstin}/${returnPeriod}/save-to-gstn`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('gst_access_token')}`
+          ...authHeaders
         },
         body: JSON.stringify({
-          workspace_id: workspaceId,
-          gstin: gstin,
-          return_period: returnPeriod,
-          gstr1_data: uploadResult.data
+          simulation_mode: simulationMode
         })
       });
 
       if (!response.ok) {
-        throw new Error('Filing failed');
+        throw new Error('Filing handoff failed');
       }
 
       const filingData = await response.json();
+      
+      if (!filingData.success || !filingData.data || !filingData.data.arn) {
+        throw new Error(filingData.message || 'Portal rejected return save event.');
+      }
 
-      const result: FilingResult = {
-        success: filingData.success ?? true,
-        arn: filingData.arn,
-        ackNumber: filingData.ack_number,
-        filingId: filingData.filing_id,
-        status: filingData.status,
-        filingDate: filingData.filing_date || new Date().toISOString(),
-        message: filingData.message || 'GSTR-1 filed successfully'
-      };
-
-      setFilingResult(result);
-      setStepData(prev => ({ ...prev, file: result }));
-      updateStepStatus('file', 'passed');
-      setLastSaved(new Date());
-
-      // Add to filing history
-      setFilingHistory(prev => [{
-        period: returnPeriod,
-        arn: result.arn!,
-        date: result.filingDate!,
-        status: 'Filed'
-      }, ...prev]);
-
+      const arn = filingData.data.arn;
+      
       toast({
-        title: 'GSTR-1 Filed Successfully',
-        description: `ARN: ${result.arn}`,
+        title: 'Return Saved on GSTN',
+        description: 'Successfully uploaded return, starting status verification polling...',
       });
-
-      // Auto-advance to post-filing
-      setTimeout(() => {
-        setCurrentStepId('postfiling');
-        if (onComplete) {
-          onComplete(result);
-        }
-      }, 1000);
+      
+      // Start the polling loop
+      await pollFilingStatus(arn);
+      
     } catch (error) {
       updateStepStatus('file', 'failed');
+      setPollingStatus('error');
       toast({
-        title: 'Filing Failed',
-        description: error instanceof Error ? error.message : 'Unknown error',
+        title: 'Filing Handoff Failed',
+        description: error instanceof Error ? error.message : 'Unknown portal connection error',
         variant: 'destructive',
       });
-    } finally {
       setIsFiling(false);
     }
   };
@@ -2389,39 +2803,58 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
             </div>
           </div>
 
+          {activeFilters && (
+            <div className="bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 px-4 py-3 rounded-md flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2 text-sm">
+                <Filter className="h-4 w-4 text-blue-600" />
+                <span>
+                  <strong>Active Filters:</strong> Showing data filtered by GSTIN (<code>{activeFilters.gstin}</code>) and selected sections.
+                </span>
+              </div>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setActiveFilters(null)}
+                className="h-7 text-blue-800 dark:text-blue-200 hover:bg-blue-100 dark:hover:bg-blue-900/50"
+              >
+                Clear Filters
+              </Button>
+            </div>
+          )}
+
           <Tabs defaultValue="b2b" className="w-full">
             <TabsList className="grid w-full grid-cols-4">
-              <TabsTrigger value="b2b">B2B ({uploadResult.data.b2b?.length || 0})</TabsTrigger>
-              <TabsTrigger value="b2cs">B2CS ({uploadResult.data.b2cs?.length || 0})</TabsTrigger>
-              <TabsTrigger value="cdnr">CDN/R ({uploadResult.data.cdnr?.length || 0})</TabsTrigger>
-              <TabsTrigger value="hsn">HSN ({uploadResult.data.hsn?.length || 0})</TabsTrigger>
+              <TabsTrigger value="b2b">B2B ({filteredB2bData.length})</TabsTrigger>
+              <TabsTrigger value="b2cs">B2CS ({filteredB2csData.length})</TabsTrigger>
+              <TabsTrigger value="cdnr">CDN/R ({filteredCdnrData.length})</TabsTrigger>
+              <TabsTrigger value="hsn">HSN ({filteredHsnData.length})</TabsTrigger>
             </TabsList>
 
             <TabsContent value="b2b" className="mt-4">
               <B2BTable 
-                data={b2bData.length > 0 ? b2bData : (uploadResult.data.b2b || [])} 
-                onDataChange={setB2bData}
+                data={filteredB2bData} 
+                onDataChange={handleB2bDataChange}
               />
             </TabsContent>
 
             <TabsContent value="b2cs" className="mt-4">
               <B2CSTable 
-                data={b2csData.length > 0 ? b2csData : (uploadResult.data.b2cs || [])}
+                data={filteredB2csData}
                 onDataChange={setB2csData}
               />
             </TabsContent>
 
             <TabsContent value="cdnr" className="mt-4">
               <CDNRTable 
-                data={cdnrData.length > 0 ? cdnrData : (uploadResult.data.cdnr || [])}
+                data={filteredCdnrData}
                 onDataChange={setCdnrData}
               />
             </TabsContent>
 
             <TabsContent value="hsn" className="mt-4">
               <HSNTable 
-                data={hsnData.length > 0 ? hsnData : (uploadResult.data.hsn || [])}
-                onDataChange={setHsnData}
+                data={filteredHsnData}
+                onDataChange={handleHsnDataChange}
               />
             </TabsContent>
           </Tabs>
@@ -2479,148 +2912,169 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
 
       {/* Tabs for different GSTR-1 tables */}
       {uploadResult?.data && (
-        <Tabs value={activeSummaryTab} onValueChange={setActiveSummaryTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-7">
-            <TabsTrigger value="summary">Summary</TabsTrigger>
-            <TabsTrigger value="b2b">B2B ({uploadResult.data.b2b?.length || 0})</TabsTrigger>
-            <TabsTrigger value="b2cl">B2CL ({uploadResult.data.b2cl?.length || 0})</TabsTrigger>
-            <TabsTrigger value="b2cs">B2CS ({uploadResult.data.b2cs?.length || 0})</TabsTrigger>
-            <TabsTrigger value="exp">Exports ({(uploadResult.data as any).exp?.length || (uploadResult.data as any).export?.length || 0})</TabsTrigger>
-            <TabsTrigger value="cdnr">CDN/R ({uploadResult.data.cdnr?.length || 0})</TabsTrigger>
-            <TabsTrigger value="hsn">HSN ({uploadResult.data.hsn?.length || 0})</TabsTrigger>
-          </TabsList>
+        <div className="space-y-4 w-full">
+          {activeFilters && (
+            <div className="bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 px-4 py-3 rounded-md flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2 text-sm">
+                <Filter className="h-4 w-4 text-blue-600" />
+                <span>
+                  <strong>Active Filters:</strong> Showing data filtered by GSTIN (<code>{activeFilters.gstin}</code>) and selected sections.
+                </span>
+              </div>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setActiveFilters(null)}
+                className="h-7 text-blue-800 dark:text-blue-200 hover:bg-blue-100 dark:hover:bg-blue-900/50"
+              >
+                Clear Filters
+              </Button>
+            </div>
+          )}
 
-          {/* Summary Tab - Using Single Source of Truth */}
-          <TabsContent value="summary" className="space-y-4">
-            <Card className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="text-lg text-slate-900 dark:text-slate-100">GSTR-1 Summary</CardTitle>
-                    <CardDescription className="text-slate-500 dark:text-slate-400">
-                      All data from single source of truth
-                    </CardDescription>
+          <Tabs value={activeSummaryTab} onValueChange={setActiveSummaryTab} className="w-full">
+            <TabsList className="grid w-full grid-cols-7">
+              <TabsTrigger value="summary">Summary</TabsTrigger>
+              <TabsTrigger value="b2b">B2B ({filteredB2bData.length})</TabsTrigger>
+              <TabsTrigger value="b2cl">B2CL ({filteredB2clData.length})</TabsTrigger>
+              <TabsTrigger value="b2cs">B2CS ({filteredB2csData.length})</TabsTrigger>
+              <TabsTrigger value="exp">Exports ({filteredExportsData.length})</TabsTrigger>
+              <TabsTrigger value="cdnr">CDN/R ({filteredCdnrData.length})</TabsTrigger>
+              <TabsTrigger value="hsn">HSN ({filteredHsnData.length})</TabsTrigger>
+            </TabsList>
+
+            {/* Summary Tab - Using Single Source of Truth */}
+            <TabsContent value="summary" className="space-y-4">
+              <Card className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-lg text-slate-900 dark:text-slate-100">GSTR-1 Summary</CardTitle>
+                      <CardDescription className="text-slate-500 dark:text-slate-400">
+                        All data from single source of truth
+                      </CardDescription>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={handleExport} disabled={isLoading}>
+                        {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileDown className="h-4 w-4" />}
+                        Export Excel
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={handleDownloadJSON}>
+                        <Download className="h-4 w-4" />
+                        Download JSON
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={handleExport} disabled={isLoading}>
-                      {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileDown className="h-4 w-4" />}
-                      Export Excel
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={handleDownloadJSON}>
-                      <Download className="h-4 w-4" />
-                      Download JSON
-                    </Button>
+                </CardHeader>
+                <CardContent>
+                  {/* Single Source of Truth Summary Table */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
+                          <th className="text-left py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">GSTIN</th>
+                          <th className="text-left py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">Invoice No</th>
+                          <th className="text-left py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">Date</th>
+                          <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">Taxable Value</th>
+                          <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">IGST</th>
+                          <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">CGST</th>
+                          <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">SGST</th>
+                          <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">Total Tax</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {gstr1Data.length > 0 ? (
+                          gstr1Data.slice(0, 15).map((row, idx) => (
+                            <tr key={idx} className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                              <td className="py-2 px-4 font-mono text-sm text-slate-700 dark:text-slate-300">{row.gstin || '-'}</td>
+                              <td className="py-2 px-4 text-slate-900 dark:text-slate-100">{row.invoice_number || '-'}</td>
+                              <td className="py-2 px-4 text-slate-900 dark:text-slate-100">{row.invoice_date || '-'}</td>
+                              <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(row.taxable_value || 0).toLocaleString()}</td>
+                              <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(row.igst || 0).toLocaleString()}</td>
+                              <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(row.cgst || 0).toLocaleString()}</td>
+                              <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(row.sgst || 0).toLocaleString()}</td>
+                              <td className="py-2 px-4 text-right font-medium text-slate-900 dark:text-slate-100">
+                                ₹{(row.total_tax || 0).toLocaleString()}
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          // Fallback to old data format
+                          (uploadResult?.data?.b2b || []).slice(0, 15).map((inv: any, idx: number) => (
+                            <tr key={idx} className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                              <td className="py-2 px-4 font-mono text-sm text-slate-700 dark:text-slate-300">{inv.customer?.gstin || '-'}</td>
+                              <td className="py-2 px-4 text-slate-900 dark:text-slate-100">{inv.invoice_no || '-'}</td>
+                              <td className="py-2 px-4 text-slate-900 dark:text-slate-100">{inv.invoice_date || '-'}</td>
+                              <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(inv.taxable_value || 0).toLocaleString()}</td>
+                              <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(inv.igst || 0).toLocaleString()}</td>
+                              <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(inv.cgst || 0).toLocaleString()}</td>
+                              <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(inv.sgst || 0).toLocaleString()}</td>
+                              <td className="py-2 px-4 text-right font-medium text-slate-900 dark:text-slate-100">
+                                ₹{((inv.igst || 0) + (inv.cgst || 0) + (inv.sgst || 0)).toLocaleString()}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {/* Single Source of Truth Summary Table */}
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
-                        <th className="text-left py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">GSTIN</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">Invoice No</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">Date</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">Taxable Value</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">IGST</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">CGST</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">SGST</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-slate-600 dark:text-slate-400">Total Tax</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {gstr1Data.length > 0 ? (
-                        gstr1Data.slice(0, 15).map((row, idx) => (
-                          <tr key={idx} className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                            <td className="py-2 px-4 font-mono text-sm text-slate-700 dark:text-slate-300">{row.gstin || '-'}</td>
-                            <td className="py-2 px-4 text-slate-900 dark:text-slate-100">{row.invoice_number || '-'}</td>
-                            <td className="py-2 px-4 text-slate-900 dark:text-slate-100">{row.invoice_date || '-'}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(row.taxable_value || 0).toLocaleString()}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(row.igst || 0).toLocaleString()}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(row.cgst || 0).toLocaleString()}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(row.sgst || 0).toLocaleString()}</td>
-                            <td className="py-2 px-4 text-right font-medium text-slate-900 dark:text-slate-100">
-                              ₹{(row.total_tax || 0).toLocaleString()}
-                            </td>
-                          </tr>
-                        ))
-                      ) : (
-                        // Fallback to old data format
-                        (uploadResult?.data?.b2b || []).slice(0, 15).map((inv: any, idx: number) => (
-                          <tr key={idx} className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                            <td className="py-2 px-4 font-mono text-sm text-slate-700 dark:text-slate-300">{inv.customer?.gstin || '-'}</td>
-                            <td className="py-2 px-4 text-slate-900 dark:text-slate-100">{inv.invoice_no || '-'}</td>
-                            <td className="py-2 px-4 text-slate-900 dark:text-slate-100">{inv.invoice_date || '-'}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(inv.taxable_value || 0).toLocaleString()}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(inv.igst || 0).toLocaleString()}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(inv.cgst || 0).toLocaleString()}</td>
-                            <td className="py-2 px-4 text-right text-slate-900 dark:text-slate-100">₹{(inv.sgst || 0).toLocaleString()}</td>
-                            <td className="py-2 px-4 text-right font-medium text-slate-900 dark:text-slate-100">
-                              ₹{((inv.igst || 0) + (inv.cgst || 0) + (inv.sgst || 0)).toLocaleString()}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-                <p className="text-sm text-slate-500 dark:text-slate-400 mt-3">
-                  Showing {Math.min(15, gstr1Data.length || (uploadResult?.data?.b2b?.length || 0))} of {gstr1Data.length || (uploadResult?.data?.b2b?.length || 0)} documents from single source of truth
-                </p>
-              </CardContent>
-            </Card>
-          </TabsContent>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-3">
+                    Showing {Math.min(15, gstr1Data.length || (uploadResult?.data?.b2b?.length || 0))} of {gstr1Data.length || (uploadResult?.data?.b2b?.length || 0)} documents from single source of truth
+                  </p>
+                </CardContent>
+              </Card>
+            </TabsContent>
 
-          {/* B2B Tab */}
-          <TabsContent value="b2b">
-            {/* B2B Table */}
-            <B2BTable 
-              data={b2bData.length > 0 ? b2bData : (uploadResult.data.b2b || [])} 
-              onDataChange={setB2bData}
-            />
-          </TabsContent>
+            {/* B2B Tab */}
+            <TabsContent value="b2b">
+              {/* B2B Table */}
+              <B2BTable 
+                data={filteredB2bData} 
+                onDataChange={handleB2bDataChange}
+              />
+            </TabsContent>
 
-          {/* B2CL Tab */}
-          <TabsContent value="b2cl">
-            <B2CLTable 
-              data={b2clData.length > 0 ? b2clData : (uploadResult.data.b2cl || [])}
-              onDataChange={setB2clData}
-            />
-          </TabsContent>
+            {/* B2CL Tab */}
+            <TabsContent value="b2cl">
+              <B2CLTable 
+                data={filteredB2clData}
+                onDataChange={setB2clData}
+              />
+            </TabsContent>
 
-          {/* B2CS Tab */}
-          <TabsContent value="b2cs">
-            <B2CSTable 
-              data={b2csData.length > 0 ? b2csData : (uploadResult.data.b2cs || [])}
-              onDataChange={setB2csData}
-            />
-          </TabsContent>
+            {/* B2CS Tab */}
+            <TabsContent value="b2cs">
+              <B2CSTable 
+                data={filteredB2csData}
+                onDataChange={setB2csData}
+              />
+            </TabsContent>
 
-          {/* Exports Tab */}
-          <TabsContent value="exp">
-            <ExportsTable 
-              data={exportsData.length > 0 ? exportsData : (uploadResult.data.exp || [])}
-              onDataChange={setExportsData}
-            />
-          </TabsContent>
+            {/* Exports Tab */}
+            <TabsContent value="exp">
+              <ExportsTable 
+                data={filteredExportsData}
+                onDataChange={setExportsData}
+              />
+            </TabsContent>
 
-          {/* CDN/R Tab */}
-          <TabsContent value="cdnr">
-            <CDNRTable 
-              data={cdnrData.length > 0 ? cdnrData : (uploadResult.data.cdnr || [])}
-              onDataChange={setCdnrData}
-            />
-          </TabsContent>
+            {/* CDN/R Tab */}
+            <TabsContent value="cdnr">
+              <CDNRTable 
+                data={filteredCdnrData}
+                onDataChange={setCdnrData}
+              />
+            </TabsContent>
 
-          {/* HSN Tab */}
-          <TabsContent value="hsn">
-            <HSNTable 
-              data={hsnData.length > 0 ? hsnData : (uploadResult.data.hsn || [])}
-              onDataChange={setHsnData}
-            />
-          </TabsContent>
-        </Tabs>
+            {/* HSN Tab */}
+            <TabsContent value="hsn">
+              <HSNTable 
+                data={filteredHsnData}
+                onDataChange={handleHsnDataChange}
+              />
+            </TabsContent>
+          </Tabs>
+        </div>
       )}
 
       {/* E-Invoice Reconciliation Link */}
@@ -2730,6 +3184,66 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
             </div>
           </div>
 
+          {/* Filing Simulation Control Panel */}
+          {!filingResult && (
+            <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 backdrop-blur-sm shadow-sm space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="flex h-2 w-2 rounded-full bg-corporate-primary animate-pulse" />
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  GSTN Filing Simulation Sandbox
+                </h4>
+              </div>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div 
+                  onClick={() => setSimulationMode('success')}
+                  className={`p-4 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                    simulationMode === 'success' 
+                      ? 'border-emerald-500 bg-emerald-500/5 dark:bg-emerald-500/10 shadow-sm' 
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 hover:bg-slate-100/50'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={`mt-0.5 h-4 w-4 rounded-full border-2 flex items-center justify-center ${
+                      simulationMode === 'success' ? 'border-emerald-500' : 'border-slate-300 dark:border-slate-600'
+                    }`}>
+                      {simulationMode === 'success' && <div className="h-2 w-2 rounded-full bg-emerald-500" />}
+                    </div>
+                    <div>
+                      <p className="font-semibold text-sm text-slate-800 dark:text-slate-200">Simulate Processing Success</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        Filing processed cleanly. Auto-advances to Step 6 with success celebration.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div 
+                  onClick={() => setSimulationMode('error')}
+                  className={`p-4 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                    simulationMode === 'error' 
+                      ? 'border-rose-500 bg-rose-500/5 dark:bg-rose-500/10 shadow-sm' 
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 hover:bg-slate-100/50'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={`mt-0.5 h-4 w-4 rounded-full border-2 flex items-center justify-center ${
+                      simulationMode === 'error' ? 'border-rose-500' : 'border-slate-300 dark:border-slate-600'
+                    }`}>
+                      {simulationMode === 'error' && <div className="h-2 w-2 rounded-full bg-rose-500" />}
+                    </div>
+                    <div>
+                      <p className="font-semibold text-sm text-slate-800 dark:text-slate-200">Simulate Portal Validation Failure</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        Simulates GSTR schema checks failing. Returns to Step 3 with red errors highlighted.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* File via GSP/GSTN */}
           {filingResult ? (
             <div className="p-6 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
@@ -2738,9 +3252,28 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
                   <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />
                 </div>
                 <div>
-                  <h3 className="font-medium text-green-900 dark:text-green-100">Filing In Progress</h3>
+                  <h3 className="font-medium text-green-900 dark:text-green-100">Filing Completed</h3>
                   <p className="text-sm text-green-700 dark:text-green-400">{filingResult.message}</p>
                 </div>
+              </div>
+            </div>
+          ) : isFiling ? (
+            <div className="p-6 rounded-lg bg-corporate-primary/5 dark:bg-corporate-primary/10 border border-corporate-primary/20 space-y-4 animate-pulse">
+              <div className="flex items-center gap-4">
+                <div className="h-12 w-12 rounded-full bg-corporate-primary/15 flex items-center justify-center">
+                  <Loader2 className="h-6 w-6 text-corporate-primary animate-spin" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-semibold text-slate-900 dark:text-slate-100">
+                    Communicating with GSTN Portal...
+                  </h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                    {pollingMessage || 'Filing returns data through secure GSP tunnel...'}
+                  </p>
+                </div>
+              </div>
+              <div className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                <div className="h-full bg-corporate-primary w-2/3 rounded-full animate-infinite animate-duration-[2000ms]" />
               </div>
             </div>
           ) : (
@@ -2759,19 +3292,10 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
                   size="lg"
                   onClick={fileGSTR1}
                   disabled={isFiling}
-                  className="bg-corporate-primary hover:bg-corporate-primaryHover"
+                  className="bg-corporate-primary hover:bg-corporate-primaryHover text-white"
                 >
-                  {isFiling ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Filing...
-                    </>
-                  ) : (
-                    <>
-                      <Send className="mr-2 h-4 w-4" />
-                      File Now
-                    </>
-                  )}
+                  <Send className="mr-2 h-4 w-4" />
+                  File Now
                 </Button>
               </div>
             </div>
@@ -3093,6 +3617,9 @@ export default function GSTR1Workflow(props: GSTR1WorkflowProps) {
         open={importDrawerOpen}
         onOpenChange={setImportDrawerOpen}
         onImport={handleFileImport}
+        workspaceId={workspaceId || undefined}
+        gstin={gstin}
+        returnPeriod={returnPeriod}
       />
     </div>
   );

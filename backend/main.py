@@ -34,9 +34,20 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database tables on startup."""
-    from database import create_tables
+    from database import create_tables, engine
+    from sqlalchemy import text
     create_tables()
     logger.info("Database tables initialized — fresh SQLite-compatible schema ready")
+    
+    # Add version column to gstr1_drafts table if it does not exist
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE gstr1_drafts ADD COLUMN version INTEGER DEFAULT 1"))
+            conn.commit()
+            logger.info("Added version column to gstr1_drafts table via ALTER TABLE")
+    except Exception as e:
+        logger.info(f"Version column already exists or ALTER TABLE skipped: {e}")
+        
     yield
 
 # Import routers
@@ -53,6 +64,8 @@ from routers import (
 
 
 # Initialize FastAPI app
+
+
 app = FastAPI(
     title="Virtual CA API",
     description="Backend API for GST compliance and CA firm management",
@@ -61,6 +74,41 @@ app = FastAPI(
 )
 
 # Configure CORS
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from typing import Any
+
+def sanitize_validation_error(obj: Any) -> Any:
+    """Recursively sanitize validation errors to ensure JSON serializability."""
+    if isinstance(obj, dict):
+        return {k: sanitize_validation_error(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_validation_error(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return [sanitize_validation_error(v) for v in obj]
+    elif isinstance(obj, Exception):
+        return str(obj)
+    elif hasattr(obj, "__dict__"):
+        return str(obj)
+    elif isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    else:
+        return str(obj)
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    sanitized_errors = sanitize_validation_error(exc.errors())
+    logger.error(f"Validation error for request {request.url}: {sanitized_errors}")
+    try:
+        body = await request.body()
+        logger.error(f"Body: {body}")
+    except:
+        pass
+    return JSONResponse(
+        status_code=422,
+        content={"detail": sanitized_errors, "body": str(exc.body)},
+    )
+
 # In production, this should be restricted to the frontend domain
 app.add_middleware(
     CORSMiddleware,

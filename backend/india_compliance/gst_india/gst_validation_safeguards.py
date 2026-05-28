@@ -2,6 +2,7 @@
 # Implements comprehensive validation rules for GSTR-1/GSTR-3B data quality
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from enum import Enum
@@ -439,40 +440,68 @@ class ValidationSafeguards:
         issues = []
         
         # Get values
-        taxable_value = float(invoice.get("taxable_value", 0) or 0)
-        rate = float(invoice.get("rate", 0) or 0)
-        igst = float(invoice.get("igst", 0) or 0)
-        cgst = float(invoice.get("cgst", 0) or 0)
-        sgst = float(invoice.get("sgst", 0) or 0)
+        try:
+            taxable_value = Decimal(str(invoice.get("taxable_value") or 0))
+            rate = Decimal(str(invoice.get("rate") or 0))
+            igst = Decimal(str(invoice.get("igst") or 0))
+            cgst = Decimal(str(invoice.get("cgst") or 0))
+            sgst = Decimal(str(invoice.get("sgst") or 0))
+            dec_tolerance = Decimal(str(self.tolerance))
+        except (ValueError, TypeError, ArithmeticError):
+            try:
+                taxable_value = float(invoice.get("taxable_value", 0) or 0)
+                rate = float(invoice.get("rate", 0) or 0)
+                igst = float(invoice.get("igst", 0) or 0)
+                cgst = float(invoice.get("cgst", 0) or 0)
+                sgst = float(invoice.get("sgst", 0) or 0)
+                dec_tolerance = float(self.tolerance)
+            except Exception:
+                return issues
         
         # Calculate expected tax
-        expected_total = taxable_value * rate / 100
-        
-        # Determine if inter-state (IGST) or intra-state (CGST+SGST)
-        if igst > 0:
-            # Inter-state
-            expected_igst = expected_total
-            calculated = igst
+        # Update all tax rate math to cast the rate to a Decimal first: taxable_value * (Decimal(str(rate)) / Decimal('100'))
+        if isinstance(taxable_value, Decimal):
+            expected_total = taxable_value * (rate / Decimal('100'))
+            
+            # Determine if inter-state (IGST) or intra-state (CGST+SGST)
+            if igst > Decimal('0.00'):
+                # Inter-state
+                expected_igst = expected_total
+                calculated = igst
+            else:
+                # Intra-state - split equally
+                expected_igst = Decimal('0.00')
+                expected_cgst = expected_total / Decimal('2.00')
+                expected_sgst = expected_total / Decimal('2.00')
+                calculated = cgst + sgst
         else:
-            # Intra-state - split equally
-            expected_igst = 0
-            expected_cgst = expected_total / 2
-            expected_sgst = expected_total / 2
-            calculated = cgst + sgst
+            expected_total = taxable_value * rate / 100
+            
+            # Determine if inter-state (IGST) or intra-state (CGST+SGST)
+            if igst > 0:
+                # Inter-state
+                expected_igst = expected_total
+                calculated = igst
+            else:
+                # Intra-state - split equally
+                expected_igst = 0
+                expected_cgst = expected_total / 2
+                expected_sgst = expected_total / 2
+                calculated = cgst + sgst
         
         # Check tolerance
         difference = abs(calculated - expected_total)
         
-        if difference > self.tolerance:
+        if difference > dec_tolerance:
             issues.append(ValidationIssue(
                 category=ValidationCategory.ROUNDING,
                 severity=ValidationSeverity.WARNING,
-                message=f"Tax calculation outside tolerance: diff=₹{difference:.2f}",
+                message=f"Tax calculation outside tolerance: diff=₹{float(difference):.2f}",
                 field="tax_amount",
                 row=row,
                 invoice_number=invoice.get("invoice_number"),
-                value=calculated,
-                expected_value=f"within ±{self.tolerance} of {expected_total:.2f}"
+                value=float(calculated),
+                expected_value=f"within ±{float(dec_tolerance)} of {float(expected_total):.2f}"
             ))
         
         return issues

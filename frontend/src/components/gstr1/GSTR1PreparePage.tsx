@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Filter,
   Upload,
@@ -44,7 +44,7 @@ import {
   selectGSTR1ForNIL,
   type GSTR1ProcessResponse
 } from '@/lib/api';
-import { autoMapColumns, type ColumnMapping } from '@/lib/excel-parser';
+import { autoMapColumns, parseExcelFile, mapRowToInvoice, type ColumnMapping } from '@/lib/excel-parser';
 import { useTenantStore } from '@/store/tenantStore';
 
 
@@ -58,6 +58,7 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
   const activeWorkspace = useActiveWorkspace();
   const { businesses: allWorkspaceBusinesses } = useTenantStore();
   const navigate = useNavigate();
+  const location = useLocation();
   const workspaceId = activeWorkspace?.id;
 
   // State
@@ -137,9 +138,17 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    const navigationState = location.state as { openImportDrawer?: boolean } | null;
+    if (navigationState?.openImportDrawer) {
+      setImportDrawerOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.pathname, location.state, navigate]);
+
   // Transform backend data to table format
   const transformToBusinessData = (data: GSTR1ProcessResponse, selectedGstin: string): GSTR1BusinessData[] => {
-    const gstr1Data = data.data;
+    const gstr1Data = ((data as any).data?.tables || (data as any).data || data) as any;
 
     // Calculate totals from all sections
     const b2bCount = gstr1Data.b2b?.length || 0;
@@ -277,6 +286,52 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
     }];
   };
 
+  const buildBusinessDataFromWorkbook = async (file: File, selectedGstin: string, mapping: Partial<ColumnMapping>): Promise<GSTR1BusinessData[]> => {
+    const parsed = await parseExcelFile(file);
+    const mergedMapping = {
+      ...autoMapColumns(parsed.headers),
+      ...mapping,
+    } as ColumnMapping;
+
+    const rows = parsed.rows.map((row) => mapRowToInvoice(row, mergedMapping));
+    const taxableAmount = rows.reduce((sum, row) => sum + (row.taxable_value || 0), 0);
+    const igst = rows.reduce((sum, row) => sum + (row.igst || 0), 0);
+    const cgst = rows.reduce((sum, row) => sum + (row.cgst || 0), 0);
+    const sgst = rows.reduce((sum, row) => sum + (row.sgst || 0), 0);
+    const cess = rows.reduce((sum, row) => sum + (row.cess || 0), 0);
+    const totalInvoiceValue = rows.reduce((sum, row) => sum + (row.invoice_value || 0), 0);
+    const totalTax = igst + cgst + sgst + cess;
+
+    return [{
+      id: selectedGstin || '1',
+      businessName: selectedGstin,
+      gstins: [{
+        id: `${selectedGstin || '1'}-gstin`,
+        gstin: selectedGstin,
+        legalName: selectedGstin,
+        state: 'State',
+        status: 'pending',
+        isConnected: activeWorkspace?.gstins?.find(p => p.gstin === selectedGstin)?.status === 'active',
+        docCount: rows.length,
+        taxableAmount,
+        totalTax,
+        totalInvoiceValue,
+        igst,
+        cgst,
+        sgst,
+        cess,
+        sections: rows.length > 0 ? [{
+          id: 'imported',
+          name: 'Imported File',
+          docCount: rows.length,
+          taxableAmount,
+          tax: totalTax,
+          totalInvoiceValue,
+        }] : []
+      }]
+    }];
+  };
+
   // Handle filters apply
   const handleFiltersApply = (filters: GSTR1Filters) => {
     setActiveFilters(filters);
@@ -295,21 +350,25 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
         if (value) mappingDict[key] = value;
       });
 
+      const workbookBusinesses = await buildBusinessDataFromWorkbook(file, gstin, mapping);
+      setBusinesses(workbookBusinesses);
+
       const result = await processGSTR1Excel(file, mappingDict, gstin, returnPeriod, workspaceId);
 
       if (result.success && result.data) {
+        const tables = (result.data as any).tables || result.data;
         setUploadResult(result);
 
         // Transform to table format
         const businessData = transformToBusinessData(result, gstin);
-        setBusinesses(businessData);
+        setBusinesses(businessData.length > 0 ? businessData : workbookBusinesses);
 
         // Save to backend
         await saveGstr1State(workspaceId!, gstin, returnPeriod, {
           currentStep: 'upload',
           stepData: { file: file.name },
           validationStatus: {},
-          gstr1Tables: result.data,
+          gstr1Tables: tables,
           uploadResult: result as unknown as Record<string, unknown>,
           classificationResult: null,
           validationResult: null,
@@ -323,7 +382,10 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
           description: `Processed ${result.total_records || 0} records successfully`,
         });
       } else {
-        throw new Error((result as any).error || result.message || 'Processing failed');
+        toast({
+          title: 'File Imported',
+          description: 'Workbook data loaded locally. Backend processing returned no tables.',
+        });
       }
     } catch (error) {
       toast({
@@ -470,7 +532,7 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => navigate('/gst/gstr1')}
+                onClick={() => navigate('/gstr1')}
                 className="h-10 w-10 text-slate-500 hover:bg-slate-100 rounded-full shrink-0"
               >
                 <ChevronLeft className="h-6 w-6" />
@@ -598,6 +660,9 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
         open={importDrawerOpen}
         onOpenChange={setImportDrawerOpen}
         onImport={handleFileImport}
+        workspaceId={workspaceId || undefined}
+        gstin={gstin}
+        returnPeriod={returnPeriod}
       />
       {/* Drawers */}
       <GSTR1SummaryDrawer

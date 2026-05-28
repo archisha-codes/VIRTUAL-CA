@@ -9,9 +9,10 @@
  */
 
 import { useAuth } from '@/contexts/AuthContext';
+import { logger } from './frontendLogger';
 
 // API Base URL - should match backend FastAPI server
-const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+export const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 // ============================================
 // Type Definitions (matching backend schema)
@@ -248,6 +249,53 @@ export interface BackendUploadResponse {
   message?: string;
 }
 
+export interface GSTR1UploadValidationError {
+  row?: number;
+  row_number?: number;
+  field?: string;
+  message?: string;
+  errors?: Array<{
+    loc?: Array<string | number>;
+    msg?: string;
+    type?: string;
+  }>;
+  raw_data?: Record<string, unknown>;
+  value?: unknown;
+}
+
+export interface GSTR1UploadParseResponse {
+  status: 'success' | 'error';
+  message: string;
+  parsed_records?: number;
+  details?: GSTR1UploadValidationError[];
+}
+
+export interface GSTR1UploadSuccessResult {
+  success: true;
+  message: string;
+  parsed_records: number;
+  data?: {
+    summary: {
+      total_taxable_value: number | string;
+      total_igst: number | string;
+      total_cgst: number | string;
+      total_sgst: number | string;
+      total_cess: number | string;
+      total_record_count: number;
+    };
+    tables: Record<string, unknown>;
+  };
+}
+
+export interface GSTR1UploadFailureResult {
+  success: false;
+  message: string;
+  errors: any[];
+  data?: null;
+}
+
+export type GSTR1UploadResult = GSTR1UploadSuccessResult | GSTR1UploadFailureResult;
+
 export interface GSTR1ExportRequest {
   clean_data: Record<string, unknown>[];
   return_period: string;
@@ -340,6 +388,72 @@ export async function uploadGSTR1Excel(
   });
 
   return handleResponse<BackendUploadResponse>(response);
+}
+
+async function parseJsonSafely(response: Response): Promise<any> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function uploadGstr1File(
+  workspaceId: string,
+  gstin: string,
+  returnPeriod: string,
+  file: File
+): Promise<GSTR1UploadResult> {
+  const formData = new FormData();
+  formData.append('workspace_id', workspaceId);
+  formData.append('gstin', gstin);
+  formData.append('return_period', returnPeriod);
+  formData.append('file', file);
+
+  const response = await fetch(`${API_BASE_URL}/api/v1/gstr1/upload`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: formData,
+  });
+
+  const payload = await parseJsonSafely(response);
+
+  const extractDetails = (value: any): any[] => {
+    if (Array.isArray(value)) return value;
+    if (Array.isArray(value?.details)) return value.details;
+    if (Array.isArray(value?.detail)) return value.detail;
+    if (value?.detail && typeof value.detail === 'object') return [value.detail];
+    return [];
+  };
+
+  const failureResult = (message: string, errors: any[]): GSTR1UploadFailureResult => ({
+    success: false,
+    message,
+    errors,
+  });
+
+  if (!response.ok) {
+    const errors = extractDetails(payload);
+    if (response.status === 422 || errors.length > 0) {
+      return failureResult(
+        payload?.message || payload?.detail?.message || 'File schema validation failed',
+        errors.length > 0 ? errors : [payload].filter(Boolean)
+      );
+    }
+
+    throw new Error(payload?.detail || payload?.message || `HTTP Error: ${response.status}`);
+  }
+
+  if (payload?.status === 'error') {
+    return failureResult(payload.message || 'File schema validation failed', extractDetails(payload));
+  }
+
+  return {
+    success: true,
+    message: payload?.message || 'File uploaded successfully',
+    parsed_records: payload?.parsed_records ?? 0,
+    data: payload?.data,
+  };
 }
 
 /**
@@ -664,32 +778,38 @@ export async function processGSTR1Excel(
   returnPeriod?: string,
   workspaceId?: string
 ): Promise<GSTR1ProcessResponse> {
+  if (!workspaceId || !companyGstin || !returnPeriod) {
+    throw new Error('Please select a Workspace, GSTIN, and Return Period before uploading.');
+  }
+
   const formData = new FormData();
   formData.append('file', file);
   formData.append('mapping', JSON.stringify(mapping));
 
   // Add workspace context for multi-tenant support
-  if (workspaceId) {
-    formData.append('workspace_id', workspaceId);
-  }
-  if (companyGstin) {
-    formData.append('company_gstin', companyGstin);
-  }
-  if (returnPeriod) {
-    formData.append('return_period', returnPeriod);
-  }
+  formData.append('workspace_id', workspaceId);
+  formData.append('gstin', companyGstin);
+  formData.append('return_period', returnPeriod);
+
+  const startTime = performance.now();
+  logger.log('API', `Initiating GSTR-1 Excel upload & parse | File: ${file.name} (${file.size} bytes)`);
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/gstr1/process`, {
+    const response = await fetch(`${API_BASE_URL}/api/v1/gstr1/upload`, {
       method: 'POST',
       headers: await getAuthHeaders(),
       body: formData,
     });
 
-    return await handleResponse<GSTR1ProcessResponse>(response);
+    const result = await handleResponse<GSTR1ProcessResponse>(response);
+    const duration = performance.now() - startTime;
+    logger.log('API', `Completed GSTR-1 Excel upload & parse in ${duration.toFixed(2)}ms | Status: Success`);
+    return result;
   } catch (error: any) {
+    const duration = performance.now() - startTime;
+    logger.error('API', `Failed GSTR-1 Excel upload & parse after ${duration.toFixed(2)}ms: ${error.message || error}`);
     if (error instanceof TypeError && error.message.includes('fetch')) {
-      console.log("[Mock Fallback] Backend offline, returning realistic mock GSTR-1 data.");
+      logger.warn('API', '[Mock Fallback] Backend offline, returning realistic mock GSTR-1 data.');
       return {
         success: true,
         message: "Backend offline. Mock data returned successfully.",
@@ -774,7 +894,7 @@ export async function apiExportGSTR1Excel(
   include_hsn: boolean = true,
   include_docs: boolean = false
 ): Promise<Blob> {
-  const response = await fetch(`${API_BASE_URL}/api/gstr1/export`, {
+  const response = await fetch(`${API_BASE_URL}/api/v1/gstr1/export`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -2641,31 +2761,35 @@ export async function saveGstr1State(
     filingResult: Record<string, unknown> | null;
   }
 ): Promise<GSTR1StateResponse> {
+  const payloadStr = JSON.stringify({
+    current_step: state.currentStep,
+    gstr1_tables: state.gstr1Tables,
+  });
+  const startTime = performance.now();
+  logger.log('API', `Initiating GSTR-1 state save | Payload size: ${payloadStr.length} bytes`);
+  
   try {
-    const response = await fetch(`${API_BASE_URL}/api/gstr1/state`, {
+    const params = new URLSearchParams({
+      workspace_id: workspaceId,
+      gstin,
+      return_period: returnPeriod,
+    });
+    const response = await fetch(`${API_BASE_URL}/api/v1/gstr1/save-draft?${params}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...await getAuthHeaders(),
       },
-      body: JSON.stringify({
-        workspace_id: workspaceId,
-        gstin,
-        return_period: returnPeriod,
-        current_step: state.currentStep,
-        step_data: state.stepData,
-        validation_status: state.validationStatus,
-        gstr1_tables: state.gstr1Tables,
-        upload_result: state.uploadResult,
-        classification_result: state.classificationResult,
-        validation_result: state.validationResult,
-        filing_result: state.filingResult,
-        last_saved: new Date().toISOString(),
-      }),
+      body: payloadStr,
     });
 
-    return await handleResponse<GSTR1StateResponse>(response);
+    const result = await handleResponse<GSTR1StateResponse>(response);
+    const duration = performance.now() - startTime;
+    logger.log('API', `Completed GSTR-1 state save in ${duration.toFixed(2)}ms | Status: Success`);
+    return result;
   } catch (error: any) {
+    const duration = performance.now() - startTime;
+    logger.error('API', `Failed GSTR-1 state save after ${duration.toFixed(2)}ms: ${error.message || error}`);
     if (error instanceof TypeError && error.message.includes('fetch')) {
       return {
         success: true,
@@ -2688,21 +2812,33 @@ export async function getGstr1State(
   gstin: string,
   returnPeriod: string
 ): Promise<GSTR1StateResponse> {
-  const params = new URLSearchParams({
-    workspace_id: workspaceId,
-    gstin,
-    return_period: returnPeriod,
-  });
+  const startTime = performance.now();
+  logger.log('API', `Initiating GSTR-1 state fetch for workspace: ${workspaceId}, GSTIN: ${gstin}, Period: ${returnPeriod}`);
+  
+  try {
+    const params = new URLSearchParams({
+      workspace_id: workspaceId,
+      gstin,
+      return_period: returnPeriod,
+    });
 
-  const response = await fetch(`${API_BASE_URL}/api/gstr1/state?${params}`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...await getAuthHeaders(),
-    },
-  });
+    const response = await fetch(`${API_BASE_URL}/api/v1/gstr1/${workspaceId}/${gstin}/${returnPeriod}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...await getAuthHeaders(),
+      },
+    });
 
-  return await handleResponse<GSTR1StateResponse>(response);
+    const result = await handleResponse<GSTR1StateResponse>(response);
+    const duration = performance.now() - startTime;
+    logger.log('API', `Completed GSTR-1 state fetch in ${duration.toFixed(2)}ms | Status: Success`);
+    return result;
+  } catch (error: any) {
+    const duration = performance.now() - startTime;
+    logger.error('API', `Failed GSTR-1 state fetch after ${duration.toFixed(2)}ms: ${error.message || error}`);
+    throw error;
+  }
 }
 
 /**
@@ -2750,7 +2886,7 @@ export async function deleteGstr1State(
     return_period: returnPeriod,
   });
 
-  const response = await fetch(`${API_BASE_URL}/api/gstr1/state?${params}`, {
+  const response = await fetch(`${API_BASE_URL}/api/v1/gstr1/${workspaceId}/${gstin}/${returnPeriod}`, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
@@ -2771,7 +2907,7 @@ export async function quickSaveGstr1Tables(
   returnPeriod: string,
   gstr1Tables: Record<string, unknown>
 ): Promise<GSTR1StateResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/gstr1/state/tables`, {
+  const response = await fetch(`${API_BASE_URL}/api/v1/gstr1/state/tables`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -2787,6 +2923,31 @@ export async function quickSaveGstr1Tables(
   });
 
   return handleResponse<GSTR1StateResponse>(response);
+}
+
+/**
+ * Update a specific GSTR-1 invoice record
+ * PUT /api/v1/gstr1/invoices/{workspace_id}/{invoice_id}
+ */
+export async function updateGstr1Invoice(
+  workspaceId: string,
+  invoiceId: string,
+  category: string,
+  recordData: Record<string, unknown>
+): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/gstr1/invoices/${workspaceId}/${invoiceId}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...await getAuthHeaders(),
+    },
+    body: JSON.stringify({
+      category,
+      record_data: recordData,
+    }),
+  });
+
+  return handleResponse<any>(response);
 }
 
 // ============================================

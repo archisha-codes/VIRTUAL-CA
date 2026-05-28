@@ -557,3 +557,31 @@ export function calculateHSNFromInvoices(b2b: B2BCustomer[]): HSNSummary[] {
     a.hsnCode.localeCompare(b.hsnCode)
   );
 }
+
+
+/**
+ * Save GSTR-1 Draft
+ */
+export function useSaveGSTR1Draft() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (params: {
+      workspaceId: string;
+      gstin: string;
+      returnPeriod: string;
+      state: any;
+    }) => {
+      const { saveGstr1State } = await import('@/lib/api');
+      return saveGstr1State(
+        params.workspaceId,
+        params.gstin,
+        params.returnPeriod,
+        params.state
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['gstr1'] });
+    },
+  });
+}

@@ -1595,9 +1595,34 @@ class HeaderMapper:
             # Skip completely empty rows
             if row.isna().all() or not row.any():
                 continue
-            
-            # Convert row to dict and normalize
+
+            # Convert row to dict and normalize.
+            # row.to_dict() silently converts Decimal objects to float via NumPy.
+            # Re-cast financial columns to Decimal so downstream validation stays consistent.
+            from decimal import Decimal as _Decimal, InvalidOperation as _IO
+            _FCOLS = frozenset(("taxable_value", "igst", "cgst", "sgst", "cess", "invoice_value"))
+
+            def _safe_decimal(v):
+                if isinstance(v, _Decimal):
+                    return v
+                if v is None:
+                    return None
+                try:
+                    import pandas as _pd
+                    if _pd.isna(v):
+                        return None
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    return _Decimal(str(v)).quantize(_Decimal("0.01"))
+                except (_IO, ValueError, TypeError):
+                    return v
+
             row_dict = row.where(pd.notnull(row), None).to_dict()
+            for _fc in _FCOLS:
+                if _fc in row_dict and row_dict[_fc] is not None:
+                    row_dict[_fc] = _safe_decimal(row_dict[_fc])
+
             normalized_row, validation = self.normalize_row(row_dict, mapping)
             
             if not self.is_empty_row(normalized_row):

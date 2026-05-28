@@ -53,6 +53,7 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { useGstr1Store } from '@/store/gstr1Store';
 import {
   DOCUMENT_TYPE_OPTIONS,
   CANCELLED_OPTIONS,
@@ -342,6 +343,8 @@ export default function GSTR1SummaryDrawer({
 }: GSTR1SummaryDrawerProps) {
   const activeWorkspace = useActiveWorkspace();
   const workspaceId = activeWorkspace?.id || '';
+  const storedSummaryData = useGstr1Store((state) => state.summaryData);
+  const storedTableData = useGstr1Store((state) => state.tableData);
   // Summary data from workflow state
   const [summaryData, setSummaryData] = useState<any>(null);
   const [isLoadingData, setIsLoadingData] = useState(false);
@@ -445,6 +448,14 @@ export default function GSTR1SummaryDrawer({
   const toggleSection = (s: string) => setSelectedSections(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
 
   const selectedTemplateLabel = selectedTemplate === 'gov' ? 'GSTR-1 Govt. Template' : 'Virtual CA Template';
+  const formatINR = (value: number | string | null | undefined) => {
+    const numericValue = Number(value || 0);
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      maximumFractionDigits: 2,
+    }).format(Number.isFinite(numericValue) ? numericValue : 0);
+  };
 
   const { toast } = useToast();
 
@@ -466,9 +477,19 @@ export default function GSTR1SummaryDrawer({
 
   useEffect(() => {
     if (open && gstin && workspaceId) {
+      if (storedSummaryData && storedTableData) {
+        setSummaryData({
+          success: true,
+          data: {
+            summary: storedSummaryData,
+            ...storedTableData,
+          },
+        });
+        return;
+      }
       loadSummaryData();
     }
-  }, [open, gstin, workspaceId, returnPeriod]);
+  }, [open, gstin, workspaceId, returnPeriod, storedSummaryData, storedTableData]);
 
   // Scroll tracking for sidebar active section - MUST be at component level (Rules of Hooks)
   useEffect(() => {
@@ -745,7 +766,15 @@ export default function GSTR1SummaryDrawer({
 
   // Helper function to get row data for a section
   const getRowData = (itemId: string) => {
-    if (!summaryData) {
+    const activeSummary = summaryData || (storedSummaryData && storedTableData ? {
+      success: true,
+      data: {
+        summary: storedSummaryData,
+        ...storedTableData,
+      },
+    } : null);
+
+    if (!activeSummary) {
       return {
         docCount: '0',
         totalAmount: '0.00',
@@ -759,7 +788,7 @@ export default function GSTR1SummaryDrawer({
     }
 
     // Handle both nested and flat response structures
-    const data = (summaryData as any).data || summaryData;
+    const data = (activeSummary as any).data || activeSummary;
     const formatNumber = (num: number | undefined) => (num || 0).toFixed(2);
 
     const asItems = (value: any) => {
@@ -858,13 +887,13 @@ export default function GSTR1SummaryDrawer({
 
       return {
         docCount: String(totals.docCount),
-        totalAmount: formatNumber(totals.totalAmount),
-        taxableAmount: formatNumber(totals.taxableAmount),
-        totalTax: formatNumber(totals.totalTax),
-        igst: formatNumber(totals.igst),
-        cgst: formatNumber(totals.cgst),
-        sgst: formatNumber(totals.sgst),
-        cess: formatNumber(totals.cess),
+        totalAmount: formatINR(totals.totalAmount),
+        taxableAmount: formatINR(totals.taxableAmount),
+        totalTax: formatINR(totals.totalTax),
+        igst: formatINR(totals.igst),
+        cgst: formatINR(totals.cgst),
+        sgst: formatINR(totals.sgst),
+        cess: formatINR(totals.cess),
       };
     };
 
@@ -921,13 +950,13 @@ export default function GSTR1SummaryDrawer({
 
       return {
         docCount: totalDocs.toString(),
-        totalAmount: formatNumber(totalAmount),
-        taxableAmount: formatNumber(taxable),
-        totalTax: formatNumber(totalTax),
-        igst: formatNumber(igst),
-        cgst: formatNumber(cgst),
-        sgst: formatNumber(sgst),
-        cess: formatNumber(cess)
+        totalAmount: formatINR(totalAmount),
+        taxableAmount: formatINR(taxable),
+        totalTax: formatINR(totalTax),
+        igst: formatINR(igst),
+        cgst: formatINR(cgst),
+        sgst: formatINR(sgst),
+        cess: formatINR(cess)
       };
     };
 
@@ -962,18 +991,18 @@ export default function GSTR1SummaryDrawer({
 
     return dataMap[itemId] || {
       docCount: '0',
-      totalAmount: '0.00',
-      taxableAmount: '0.00',
-      totalTax: '0.00',
-      igst: '0.00',
-      cgst: '0.00',
-      sgst: '0.00',
-      cess: '0.00'
+      totalAmount: formatINR(0),
+      taxableAmount: formatINR(0),
+      totalTax: formatINR(0),
+      igst: formatINR(0),
+      cgst: formatINR(0),
+      sgst: formatINR(0),
+      cess: formatINR(0)
     };
   };
 
   const formatVal = (val: string | undefined): string => {
-    if (!val || val === '0' || val === '0.00' || val === '0.0') return '-';
+    if (!val || val === '0' || val === '0.00' || val === '0.0' || val === '₹0.00') return '-';
     return val;
   };
 
@@ -1272,7 +1301,7 @@ export default function GSTR1SummaryDrawer({
           </table>
         </div>
         <div className="p-3 border-t border-slate-200 flex justify-between items-center bg-white shadow-sm mt-auto">
-          <Button variant="outline" className="h-8 text-xs text-slate-600" onClick={() => scrollToSection('next')}>Next <ChevronRight className="ml-1 h-3 w-3" /></Button>
+          <Button variant="outline" className="h-8 text-xs text-slate-600" onClick={() => setViewMode('documents')}>Next <ChevronRight className="ml-1 h-3 w-3" /></Button>
         </div>
       </div>
     );
@@ -1873,15 +1902,15 @@ export default function GSTR1SummaryDrawer({
                 return (
                   <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50/80 transition-colors text-xs text-slate-600">
                     <td className="py-3 px-4 text-center border-r border-slate-100/50"><Checkbox className="border-slate-300" /></td>
-                    <td className="py-3 px-4 font-bold text-blue-600 cursor-pointer hover:underline border-r border-slate-100/50" onClick={() => { setSelectedDocument(row); setViewMode('document-details'); }}>{inum || '-'}</td>
-                    <td className="py-3 px-4 border-r border-slate-100/50">{getRowValue(row, ['inv_typ', 'nt_typ', 'document_type']) || (ctin ? 'INVOICE' : 'B2CS')}</td>
+                    <td className="py-3 px-4 font-bold text-blue-600 cursor-pointer hover:underline border-r border-slate-100/50" onClick={() => { setSelectedDocument(row); setViewMode('document-details'); }}>{String(inum || '-')}</td>
+                    <td className="py-3 px-4 border-r border-slate-100/50">{String(getRowValue(row, ['inv_typ', 'nt_typ', 'document_type']) || (ctin ? 'INVOICE' : 'B2CS'))}</td>
                     <td className="py-3 px-4 uppercase font-bold border-r border-slate-100/50">{currentSectionId.toUpperCase()}</td>
                     <td className="py-3 px-4 uppercase text-slate-400 font-medium border-r border-slate-100/50">REGULAR</td>
                     <td className="py-3 px-4 border-r border-slate-100/50">-</td>
-                    <td className="py-3 px-4 border-r border-slate-100/50">{idt || '-'}</td>
-                    <td className="py-3 px-4 font-mono border-r border-slate-100/50">{ctin || '-'}</td>
-                    <td className="py-3 px-4 truncate max-w-[150px] border-r border-slate-100/50">{custName || '-'}</td>
-                    <td className="py-3 px-4">{pos || '-'}</td>
+                    <td className="py-3 px-4 border-r border-slate-100/50">{String(idt || '-')}</td>
+                    <td className="py-3 px-4 font-mono border-r border-slate-100/50">{String(ctin || '-')}</td>
+                    <td className="py-3 px-4 truncate max-w-[150px] border-r border-slate-100/50">{String(custName || '-')}</td>
+                    <td className="py-3 px-4">{String(pos || '-')}</td>
                   </tr>
                 );
               }) : (
