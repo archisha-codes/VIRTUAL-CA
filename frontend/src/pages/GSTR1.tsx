@@ -48,14 +48,6 @@ export default function GSTR1Page() {
       setIsDrawerComplete(true);
     }
   }, [hasExistingState, navigationState]);
-
-  // Reset state when navigating back to the base route without state
-  useEffect(() => {
-    if ((location.pathname === '/gstr1' || location.pathname === '/gst/forms/gstr1') && !location.state) {
-      setDrawerOpen(true);
-      setIsDrawerComplete(false);
-    }
-  }, [location.pathname, location.state]);
   
   // Handle continue from drawer flow - navigate to prepare page with state
   const handleDrawerContinue = (gstins: string[], period: string) => {

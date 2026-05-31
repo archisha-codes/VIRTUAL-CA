@@ -7,7 +7,6 @@ with structured error reporting and logging.
 
 import logging
 import traceback
-from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -80,63 +79,32 @@ def determine_section(row: Dict[str, Any]) -> str:
 def process_excel_file(file: UploadFile) -> List[Dict[str, Any]]:
     """
     Process uploaded Excel file and convert to list of dictionaries.
-
-    All financial columns (taxable_value, igst, cgst, sgst, cess, invoice_value)
-    are cast to ``decimal.Decimal`` after ``to_dict`` so that downstream
-    validation never receives a raw float value.
-
+    
     Args:
         file: Uploaded Excel file
-
+        
     Returns:
-        List of row dictionaries with Decimal financial values
-
+        List of row dictionaries
+        
     Raises:
         Exception: If file reading fails
     """
     logger.info(f"Processing Excel file: {file.filename}")
-
-    # Financial columns that must keep Decimal precision
-    _FINANCIAL_COLS = frozenset(
-        ("taxable_value", "igst", "cgst", "sgst", "cess", "invoice_value")
-    )
-
-    def _to_decimal(val: Any) -> Decimal:
-        """Convert a cell value to Decimal, returning Decimal('0.00') on failure."""
-        if isinstance(val, Decimal):
-            return val
-        if val is None:
-            return Decimal("0.00")
-        try:
-            if pd.isna(val):
-                return Decimal("0.00")
-        except (TypeError, ValueError):
-            pass
-        try:
-            return Decimal(str(val)).quantize(Decimal("0.01"))
-        except (InvalidOperation, ValueError, TypeError):
-            return Decimal("0.00")
-
+    
     try:
         # Read Excel file
         df = pd.read_excel(file.file)
         logger.info(f"Read {len(df)} rows from Excel file")
-
+        
         # Clean column names (strip whitespace, lowercase)
         df.columns = [str(col).strip() for col in df.columns]
-
-        # Convert to records — then immediately re-cast financial columns to Decimal
-        # because pandas to_dict('records') converts object-dtype Decimal back to float.
+        
+        # Convert to records
         records = df.to_dict(orient="records")
-        financial_cols_present = [c for c in df.columns if c in _FINANCIAL_COLS]
-        for rec in records:
-            for col in financial_cols_present:
-                if col in rec:
-                    rec[col] = _to_decimal(rec[col])
-
-        logger.debug(f"Converted {len(records)} rows to Decimal-safe dictionaries")
+        logger.debug(f"Converted {len(records)} rows to dictionaries")
+        
         return records
-
+    
     except Exception as e:
         logger.error(f"Failed to process Excel file: {str(e)}")
         raise

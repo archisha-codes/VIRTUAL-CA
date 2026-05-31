@@ -17,15 +17,14 @@ Gaps addressed in this revision (per validations_and_calculations_audit.md §C1)
 
 import logging
 import re
-from decimal import Decimal, ROUND_HALF_EVEN
 from datetime import datetime, timedelta, date as date_type
 from typing import Any, Dict, List, Optional
 from enum import Enum
 
 
 # Set up logger for this module
-from gst_india.utils.gstr1.structured_logging import get_structured_logger, set_row_context
-logger = get_structured_logger("gstr1_validations")
+logger = logging.getLogger("gstr1_validations")
+logger.setLevel(logging.DEBUG)
 
 
 class GSTR1ValidationError:
@@ -436,7 +435,7 @@ def validate_invoice_date(
         return_year if return_month < 12 else return_year + 1,
         return_month + 1 if return_month < 12 else 1,
         1
-    ) - timedelta(days=1)
+    ) - datetime.timedelta(days=1)
     
     # Allow up to 7 days into the next month for previous month's invoices
     grace_period_end = datetime(
@@ -544,10 +543,10 @@ def validate_taxable_value(
         GSTR1ValidationError if invalid, None if valid
     """
     try:
-        taxable = Decimal(str(taxable_value)) if taxable_value is not None and str(taxable_value).strip() != "" else Decimal('0.00')
-        tax = Decimal(str(tax_amount)) if tax_amount is not None and str(tax_amount).strip() != "" else Decimal('0.00')
-        rate = Decimal(str(gst_rate)) if gst_rate is not None and str(gst_rate).strip() != "" else Decimal('0.00')
-    except (ValueError, TypeError, ArithmeticError):
+        taxable = float(taxable_value) if taxable_value else 0.0
+        tax = float(tax_amount) if tax_amount else 0.0
+        rate = float(gst_rate) if gst_rate else 0.0
+    except (ValueError, TypeError):
         return GSTR1ValidationError(
             row=0,
             field=field_name,
@@ -555,41 +554,16 @@ def validate_taxable_value(
             value=None
         )
     
-    # Calculate expected tax amount with Banker's Rounding (Round-Half-Even) to 2 decimal places
-    expected_tax = (taxable * rate / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_HALF_EVEN)
-    variance = abs(tax - expected_tax)
-    
-    # Check if a rounding reconciliation happened (minor difference within 1.00 rupee tolerance)
-    if Decimal('0.00') < variance <= Decimal('1.00'):
-        logger.info(
-            "Rounding reconciliation applied",
-            {
-                "event": "rounding_reconciliation",
-                "expected_tax": float(expected_tax),
-                "actual_tax": float(tax),
-                "reconciliation_difference": float(variance)
-            }
-        )
-    
-    logger.info(
-        "Tax calculation performed",
-        {
-            "event": "tax_calculation",
-            "taxable": float(taxable),
-            "rate": float(rate),
-            "computed_tax": float(expected_tax),
-            "actual_tax": float(tax),
-            "variance": float(variance)
-        }
-    )
+    # Calculate expected tax amount
+    expected_tax = round(taxable * rate / 100, 2)
     
     # Allow small difference due to rounding (up to 1 rupee)
-    if variance > Decimal('1.00'):
+    if abs(tax - expected_tax) > 1.0:
         return GSTR1ValidationError(
             row=0,
             field=field_name,
             error=f"Tax amount mismatch: expected {expected_tax}, got {tax} (rate: {rate}%)",
-            value=float(tax)
+            value=tax
         )
     
     return None
@@ -618,68 +592,33 @@ def validate_invoice_value(
         GSTR1ValidationError if invalid, None if valid
     """
     try:
-        taxable = Decimal(str(taxable_value)) if taxable_value is not None and str(taxable_value).strip() != "" else Decimal('0.00')
-        cgst = Decimal(str(cgst_amount)) if cgst_amount is not None and str(cgst_amount).strip() != "" else Decimal('0.00')
-        sgst = Decimal(str(sgst_amount)) if sgst_amount is not None and str(sgst_amount).strip() != "" else Decimal('0.00')
-        igst = Decimal(str(igst_amount)) if igst_amount is not None and str(igst_amount).strip() != "" else Decimal('0.00')
-        cess = Decimal(str(cess_amount)) if cess_amount is not None and str(cess_amount).strip() != "" else Decimal('0.00')
-    except (ValueError, TypeError, ArithmeticError):
+        taxable = float(taxable_value) if taxable_value else 0.0
+        cgst = float(cgst_amount) if cgst_amount else 0.0
+        sgst = float(sgst_amount) if sgst_amount else 0.0
+        igst = float(igst_amount) if igst_amount else 0.0
+        cess = float(cess_amount) if cess_amount else 0.0
+    except (ValueError, TypeError):
         return GSTR1ValidationError(
             row=0,
             field=field_name,
             error="Invalid numeric value for invoice amounts",
             value=None
         )
-        
-    # Round all values using Banker's Rounding to 2 decimal places
-    taxable = taxable.quantize(Decimal('0.01'), rounding=ROUND_HALF_EVEN)
-    cgst = cgst.quantize(Decimal('0.01'), rounding=ROUND_HALF_EVEN)
-    sgst = sgst.quantize(Decimal('0.01'), rounding=ROUND_HALF_EVEN)
-    igst = igst.quantize(Decimal('0.01'), rounding=ROUND_HALF_EVEN)
-    cess = cess.quantize(Decimal('0.01'), rounding=ROUND_HALF_EVEN)
     
     # Calculate total tax
     total_tax = cgst + sgst + igst + cess
     
     # For intra-state (CGST+SGST) or inter-state (IGST) supplies
     # The invoice total should equal taxable value + tax
-    if igst > Decimal('0.00'):
+    if igst > 0:
         # Inter-state: should have IGST, no CGST/SGST
         expected_total = taxable + igst + cess
     else:
         # Intra-state: should have CGST+SGST, no IGST
         expected_total = taxable + cgst + sgst + cess
-        
-    variance = abs(total_tax - (expected_total - taxable))
-    
-    # Check if a rounding reconciliation happened (minor difference within 1.00 rupee tolerance)
-    if Decimal('0.00') < variance <= Decimal('1.00'):
-        logger.info(
-            "Invoice value rounding reconciliation applied",
-            {
-                "event": "invoice_rounding_reconciliation",
-                "total_tax": float(total_tax),
-                "expected_tax_diff": float(expected_total - taxable),
-                "reconciliation_difference": float(variance)
-            }
-        )
-    
-    logger.info(
-        "Invoice value calculation validated",
-        {
-            "event": "invoice_value_calculation",
-            "taxable": float(taxable),
-            "cgst": float(cgst),
-            "sgst": float(sgst),
-            "igst": float(igst),
-            "cess": float(cess),
-            "expected_total": float(expected_total),
-            "variance": float(variance)
-        }
-    )
     
     # Allow small difference due to rounding (up to 1 rupee)
-    if variance > Decimal('1.00'):
+    if abs(total_tax - (expected_total - taxable)) > 1.0:
         return GSTR1ValidationError(
             row=0,
             field=field_name,
@@ -716,12 +655,8 @@ def validate_hsn_with_chapter(
     Returns:
         GSTR1ValidationError if invalid, None if valid.
     """
-    if not hsn_code or str(hsn_code).strip() == "" or str(hsn_code).strip().lower() in ("nan", "none", "null", "999999-missing"):
-        return GSTR1ValidationError(
-            row=0, field=field_name,
-            error="Missing HSN: ERP data is missing mandatory HSN code",
-            value=hsn_code,
-        )
+    if not hsn_code or str(hsn_code).strip() == "":
+        return None  # Optional field; absence is handled by UQC check
 
     code = str(hsn_code).strip()
 
@@ -854,25 +789,26 @@ def get_b2cs_limit_for_date(invoice_date: Any) -> int:
 def validate_amendment_window(
     amendment_date: Any,
     original_invoice_date: Any,
-    annual_return_filed_date: Optional[Any] = None,
     field_name: str = "invoice_date",
 ) -> Optional[GSTR1ValidationError]:
     """
-    Validate that an amendment is within the permissible CGST Section 37(3) time limit.
+    Validate that an amendment is within the permissible 3-year window.
 
-    Per Section 37(3) of the CGST Act, amendments to GSTR-1 invoices can only
-    be made up to the 30th November of the succeeding financial year following
-    the financial year in which the original invoice was issued, or the date of
-    filing of the relevant annual return (GSTR-9), whichever is earlier.
+    Per Section 39 of the CGST Act, amendments to GSTR-1 invoices can only
+    be made within 36 months of the end of the financial year in which the
+    original invoice was issued (i.e., 3 full financial years).
+
+    For practical purposes this module applies a simpler 36-consecutive-month
+    rolling window from the original invoice date, which is slightly more
+    permissive and is the industry-accepted interpretation.
 
     Severity:
-    - ERROR  : amendment date is beyond the Section 37(3) cutoff date.
-    - WARNING: amendment is within the window but < 90 days before expiry.
+    - ERROR  : amendment date is beyond 36 months of original invoice date.
+    - WARNING: amendment is within the window but < 3 months before expiry.
 
     Args:
         amendment_date: Date of the amendment document.
         original_invoice_date: Date of the original invoice being amended.
-        annual_return_filed_date: Optional date of annual return (GSTR-9) filing.
         field_name: Field name for error messages.
 
     Returns:
@@ -896,57 +832,38 @@ def validate_amendment_window(
 
     amend_d = _parse(amendment_date)
     orig_d = _parse(original_invoice_date)
-    annual_return_date = _parse(annual_return_filed_date) if annual_return_filed_date else None
 
     if amend_d is None or orig_d is None:
         return None  # Unparseable dates are handled by date validators
 
-    # 1. Determine Indian Financial Year of the original invoice
-    # If month >= 4 (April), the FY starts in orig_d.year, succeeding FY ends in orig_d.year + 1.
-    # Otherwise, it starts in orig_d.year - 1, succeeding FY ends in orig_d.year.
-    if orig_d.month >= 4:
-        succeeding_year = orig_d.year + 1
-    else:
-        succeeding_year = orig_d.year
+    # 36-month window: original date + 3 years
+    window_end_year = orig_d.year + 3
+    try:
+        window_end = orig_d.replace(year=window_end_year)
+    except ValueError:
+        # Edge case: Feb-29 in non-leap year
+        window_end = orig_d.replace(year=window_end_year, day=28)
 
-    nov_30_succeeding_fy = date_type(succeeding_year, 11, 30)
-
-    # 2. Determine final cutoff date (earlier of 30th November of succeeding FY or annual return date)
-    cutoff_date = nov_30_succeeding_fy
-    if annual_return_date is not None:
-        cutoff_date = min(nov_30_succeeding_fy, annual_return_date)
-
-    if amend_d > cutoff_date:
-        logger.warning(
-            "Amendment is time-barred under Section 37(3)",
-            {
-                "event": "time_bar_breach",
-                "original_date": orig_d.isoformat(),
-                "amendment_date": amend_d.isoformat(),
-                "cutoff_date": cutoff_date.isoformat(),
-                "annual_return_date": annual_return_date.isoformat() if annual_return_date else None
-            }
-        )
+    if amend_d > window_end:
         return GSTR1ValidationError(
             row=0, field=field_name,
             error=(
-                f"[ERROR] Amendment is time-barred under Section 37(3) of the CGST Act. "
-                f"Original invoice belongs to FY {orig_d.year if orig_d.month >= 4 else orig_d.year - 1}-{(orig_d.year + 1) if orig_d.month >= 4 else orig_d.year}. "
-                f"Deadline was {cutoff_date.strftime('%d/%m/%Y')} (30th November of succeeding FY or annual return date), "
-                f"got amendment date {amend_d.strftime('%d/%m/%Y')}."
+                f"[ERROR] Amendment outside 3-year window: original invoice date "
+                f"{orig_d.strftime('%d/%m/%Y')}, window expired {window_end.strftime('%d/%m/%Y')}. "
+                f"Amendments beyond 36 months are not permitted under Section 39 CGST Act."
             ),
             value=str(amendment_date),
         )
 
     # Warn if < 90 days remain before window closes
-    days_remaining = (cutoff_date - amend_d).days
+    days_remaining = (window_end - amend_d).days
     if days_remaining < 90:
         return GSTR1ValidationError(
             row=0, field=field_name,
             error=(
                 f"[WARNING] Amendment window expiring soon: {days_remaining} days remain "
-                f"(window closes {cutoff_date.strftime('%d/%m/%Y')}). "
-                f"Ensure timely filing to avoid Section 37(3) rejection."
+                f"(window closes {window_end.strftime('%d/%m/%Y')}). "
+                f"Ensure timely filing to avoid rejection."
             ),
             value=str(amendment_date),
         )
@@ -1266,15 +1183,6 @@ def validate_b2cs_row(row: Dict[str, Any], row_number: int) -> List[Dict[str, An
         try:
             check_value = float(check_value_raw)
             if check_value > b2cs_limit:
-                logger.warning(
-                    f"B2CS Limit Check Applied: ₹{b2cs_limit:,} threshold breached",
-                    {
-                        "event": "b2cs_limit_breach",
-                        "invoice_value": check_value,
-                        "b2cs_limit": b2cs_limit,
-                        "invoice_date": str(invoice_date)
-                    }
-                )
                 errors.append({
                     "row": row_number,
                     "field": "invoice_value",
@@ -1284,16 +1192,6 @@ def validate_b2cs_row(row: Dict[str, Any], row_number: int) -> List[Dict[str, An
                         f"Inter-state invoices above this threshold must be reported as B2CL."
                     ),
                 })
-            else:
-                logger.info(
-                    "B2CS Limit Check Applied: Within threshold limit",
-                    {
-                        "event": "b2cs_limit_ok",
-                        "invoice_value": check_value,
-                        "b2cs_limit": b2cs_limit,
-                        "invoice_date": str(invoice_date)
-                    }
-                )
         except (ValueError, TypeError):
             pass
     
@@ -1566,9 +1464,6 @@ def validate_gstr1_row(
     # Normalize section name
     section = str(section).lower().strip()
 
-    invoice_no = row.get("invoice_no") or row.get("invoice_number") or row.get("inum") or ""
-    set_row_context(invoice_no=str(invoice_no), row_number=row_number)
-
     # ------------------------------------------------------------------
     # Gap 7: Cross-period amendment window check (all section types)
     # Run before section dispatch so it applies universally.
@@ -1578,7 +1473,6 @@ def validate_gstr1_row(
         amend_err = validate_amendment_window(
             amendment_date=row.get("invoice_date") or row.get("note_date"),
             original_invoice_date=row.get("original_invoice_date") or row.get("orig_idt"),
-            annual_return_filed_date=row.get("annual_return_filed_date") or row.get("annual_return_date"),
             field_name="invoice_date",
         )
         if amend_err:
@@ -1593,34 +1487,14 @@ def validate_gstr1_row(
         """Wrap validate_eco_row to accept optional company_gstin arg."""
         return validate_eco_row(r, rn)
 
-    def _b2cl_wrapper(r: Dict[str, Any], rn: int, cg: str = "") -> List[Dict[str, Any]]:
-        """Wrap validate_b2cl_row to accept optional company_gstin arg."""
-        return validate_b2cl_row(r, rn)
-
-    def _b2cs_wrapper(r: Dict[str, Any], rn: int, cg: str = "") -> List[Dict[str, Any]]:
-        """Wrap validate_b2cs_row to accept optional company_gstin arg."""
-        return validate_b2cs_row(r, rn)
-
-    def _export_wrapper(r: Dict[str, Any], rn: int, cg: str = "") -> List[Dict[str, Any]]:
-        """Wrap validate_export_row to accept optional company_gstin arg."""
-        return validate_export_row(r, rn)
-
-    def _cdnr_wrapper(r: Dict[str, Any], rn: int, cg: str = "") -> List[Dict[str, Any]]:
-        """Wrap validate_cdnr_row to accept optional company_gstin arg."""
-        return validate_cdnr_row(r, rn)
-
-    def _cdnur_wrapper(r: Dict[str, Any], rn: int, cg: str = "") -> List[Dict[str, Any]]:
-        """Wrap validate_cdnur_row to accept optional company_gstin arg."""
-        return validate_cdnur_row(r, rn)
-
     validators = {
         "b2b": validate_b2b_row,
-        "b2cl": _b2cl_wrapper,
-        "b2cs": _b2cs_wrapper,
-        "export": _export_wrapper,
-        "exp": _export_wrapper,
-        "cdnr": _cdnr_wrapper,
-        "cdnur": _cdnur_wrapper,
+        "b2cl": validate_b2cl_row,
+        "b2cs": validate_b2cs_row,
+        "export": validate_export_row,
+        "exp": validate_export_row,
+        "cdnr": validate_cdnr_row,
+        "cdnur": validate_cdnur_row,
         # Gaps 5 & 8: ECO / Section 9(5) sections
         "eco": _eco_wrapper,
         "ecom": _eco_wrapper,
@@ -1665,29 +1539,9 @@ def validate_gstr1_data(
         List of all validation errors from all rows
     """
     all_errors = []
-    logger.info(
-        "Validation phase started",
-        {
-            "event": "validation_start",
-            "section": section,
-            "company_gstin": company_gstin,
-            "total_rows": len(data)
-        }
-    )
     
     for row_number, row in enumerate(data, start=1):
         errors = validate_gstr1_row(row, row_number, section, company_gstin)
         all_errors.extend(errors)
-        
-    logger.info(
-        "Validation phase completed",
-        {
-            "event": "validation_end",
-            "section": section,
-            "company_gstin": company_gstin,
-            "total_rows": len(data),
-            "errors_found": len(all_errors)
-        }
-    )
     
     return all_errors

@@ -14,8 +14,6 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
-from india_compliance.gst_india.utils.cryptography import aes_encrypt_data, hmac_sha256
-
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -181,17 +179,13 @@ class GSTNClient:
         include_auth: bool = False
     ) -> Dict[str, str]:
         """Get request headers."""
-        req_id = self._generate_request_id()
         headers = {
             "Content-Type": content_type,
             "user_name": self.gstin,
             "ip_address": self.ip_address,
-            "device_id": req_id[:15],
-            "request_id": req_id,
-            "ts": datetime.now().isoformat(),
-            "client_id": self.app_key,
-            "state_cd": self.gstin[:2] if len(self.gstin) >= 2 else "27",
-            "txn_id": req_id
+            "device_id": self._generate_request_id()[:15],
+            "request_id": self._generate_request_id(),
+            "ts": datetime.now().isoformat()
         }
         
         if include_auth and self.session_token:
@@ -546,7 +540,7 @@ class GSTNClient:
         json_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        File a return with AES encryption and HMAC.
+        File a return.
         
         Args:
             gstin: GSTIN
@@ -557,49 +551,19 @@ class GSTNClient:
         Returns:
             Filing response with ARN
         """
-        json_str = json.dumps(json_data, separators=(',', ':'))
-        
-        # GSTN payload encryption requirement: AES ECB with AppKey
-        # Use session token or a configured session key for real GSTN (often called Sek/AppKey)
-        encryption_key = self.app_key
-        try:
-            encrypted_data = aes_encrypt_data(json_str, encryption_key)
-            hmac_hash = hmac_sha256(encrypted_data, encryption_key.encode())
-        except Exception as e:
-            logger.error(f"Failed to encrypt payload: {str(e)}")
-            # Fallback to plain for local testing if encryption fails
-            encrypted_data = base64.b64encode(json_str.encode()).decode()
-            hmac_hash = "DUMMY_HMAC"
-
         data = {
             "gstin": gstin,
             "rtp": return_period,
             "return_type": return_type,
-            "action": "RETSAVE",
-            "data": encrypted_data,
-            "hmac": hmac_hash
+            "json_str": json.dumps(json_data)
         }
         
-        # We mock response if we're not actually connecting to GSTN in local dev
-        # For actual GSTN this would use self._make_request
-        # To handle testing gracefully without real GSTN access:
-        if "dummy" in self.app_key.lower():
-            return {"status_cd": "P", "reference_id": "MOCK_REF_ID_" + datetime.now().strftime("%Y%m%d%H%M%S"), "message": "Successfully mocked RETSAVE"}
-        
-        try:
-            return self._make_request(
-                method="POST",
-                endpoint=self.ENDPOINTS["gstr_filing"],
-                data=data,
-                include_auth=True
-            )
-        except Exception as e:
-            # Map GSTN specific errors if possible
-            error_str = str(e)
-            if "RET13504" in error_str or "RET13506" in error_str:
-                logger.warning(f"GSTN returned error RET13504/13506 - Schema mismatch or duplicate")
-                raise GSPAPIError("GSTN validation error: " + error_str)
-            raise
+        return self._make_request(
+            method="POST",
+            endpoint=self.ENDPOINTS["gstr_filing"],
+            data=data,
+            include_auth=True
+        )
     
     def get_filing_status(
         self,

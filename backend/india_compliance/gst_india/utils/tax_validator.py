@@ -8,57 +8,14 @@ Validates tax breakups based on tax rates:
 - Flags and logs inconsistencies
 """
 
-from typing import Tuple, Dict, Any, List, Optional
-from pydantic import BaseModel, Field
+from typing import Tuple, Dict, Any, List
 from decimal import Decimal, ROUND_HALF_UP
-from india_compliance.gst_india.utils.logger import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # Tolerance for floating point comparison (in rupees)
 TAX_TOLERANCE = 0.05
-
-class TaxBreakupValues(BaseModel):
-    igst: float = 0.0
-    cgst: float = 0.0
-    sgst: float = 0.0
-    expected_total: float = 0.0
-    expected_half: float = 0.0
-
-class ValidationResult(BaseModel):
-    is_valid: bool
-    error_message: str
-    corrected_values: TaxBreakupValues
-
-class RowTaxBreakupResult(BaseModel):
-    is_valid: bool
-    warnings: List[str]
-    corrected_row: Dict[str, Any]
-
-class TaxBreakupTotals(BaseModel):
-    taxable_value: float = 0.0
-    igst: float = 0.0
-    cgst: float = 0.0
-    sgst: float = 0.0
-    cess: float = 0.0
-
-class ExpectedTotals(BaseModel):
-    igst: float = 0.0
-    cgst_sgst: float = 0.0
-
-class Discrepancies(BaseModel):
-    igst_diff: float = 0.0
-    cgst_sgst_diff: float = 0.0
-
-class TaxBreakupSummary(BaseModel):
-    total_rows: int
-    totals: TaxBreakupTotals
-    expected_totals: ExpectedTotals
-    discrepancies: Discrepancies
-    is_balanced: bool
-    warnings: List[str]
-    validated_rows: List[Dict[str, Any]]
-
 
 
 def round2(value: float) -> float:
@@ -78,8 +35,8 @@ def validate_tax_breakup_enhanced(
     cgst: float = 0,
     sgst: float = 0,
     pos: str = "",
-    is_inter_state: Optional[bool] = None,
-) -> ValidationResult:
+    is_inter_state: bool = None,
+) -> Tuple[bool, str, Dict[str, float]]:
     """
     Validate tax breakup based on rate and inter/intra-state classification.
     
@@ -101,7 +58,7 @@ def validate_tax_breakup_enhanced(
         corrected_values contains rounded and corrected tax amounts
     """
     if taxable_value is None or rate is None:
-        return ValidationResult(is_valid=True, error_message="", corrected_values=TaxBreakupValues(igst=0, cgst=0, sgst=0))
+        return (True, "", {"igst": 0, "cgst": 0, "sgst": 0})
     
     # Round inputs
     taxable_value = round2(taxable_value)
@@ -200,10 +157,10 @@ def validate_tax_breakup_enhanced(
     }
     result.update(corrections)
     
-    return ValidationResult(is_valid=is_valid, error_message=error_msg, corrected_values=TaxBreakupValues(**result))
+    return (is_valid, error_msg, result)
 
 
-def validate_row_tax_breakup(row: Dict[str, Any], row_number: int = 0) -> RowTaxBreakupResult:
+def validate_row_tax_breakup(row: Dict[str, Any], row_number: int = 0) -> Tuple[bool, List[str], Dict[str, Any]]:
     """
     Validate tax breakup for a single row.
     
@@ -227,7 +184,7 @@ def validate_row_tax_breakup(row: Dict[str, Any], row_number: int = 0) -> RowTax
     
     # Skip if essential values missing
     if taxable_value is None or rate is None:
-        return RowTaxBreakupResult(is_valid=True, warnings=warnings, corrected_row=corrected_row)
+        return (True, warnings, corrected_row)
     
     # Determine inter-state from POS
     pos_code = str(pos)[:2] if pos else ""
@@ -239,7 +196,7 @@ def validate_row_tax_breakup(row: Dict[str, Any], row_number: int = 0) -> RowTax
     ]
     
     # Validate
-    val_res = validate_tax_breakup_enhanced(
+    is_valid, error_msg, result = validate_tax_breakup_enhanced(
         taxable_value=taxable_value,
         rate=rate,
         igst=igst,
@@ -249,23 +206,23 @@ def validate_row_tax_breakup(row: Dict[str, Any], row_number: int = 0) -> RowTax
         is_inter_state=is_inter_state,
     )
     
-    if val_res.error_message:
-        warnings.append(f"Tax breakup: {val_res.error_message}")
+    if error_msg:
+        warnings.append(f"Tax breakup: {error_msg}")
         if row_number > 0:
-            logger.warning(f"Row {row_number}: {val_res.error_message}")
+            logger.warning(f"Row {row_number}: {error_msg}")
     
     # Apply corrections
-    if hasattr(val_res.corrected_values, 'igst'):
-        corrected_row["igst"] = val_res.corrected_values.igst
-    if hasattr(val_res.corrected_values, 'cgst'):
-        corrected_row["cgst"] = val_res.corrected_values.cgst
-    if hasattr(val_res.corrected_values, 'sgst'):
-        corrected_row["sgst"] = val_res.corrected_values.sgst
+    if "igst" in result:
+        corrected_row["igst"] = result["igst"]
+    if "cgst" in result:
+        corrected_row["cgst"] = result["cgst"]
+    if "sgst" in result:
+        corrected_row["sgst"] = result["sgst"]
     
-    return RowTaxBreakupResult(is_valid=val_res.is_valid if 'val_res' in locals() else True, warnings=warnings, corrected_row=corrected_row)
+    return (is_valid, warnings, corrected_row)
 
 
-def validate_tax_breakup_sums(clean_data: List[Dict[str, Any]]) -> TaxBreakupSummary:
+def validate_tax_breakup_sums(clean_data: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Validate tax breakup sums across all rows and generate a summary report.
     
@@ -299,9 +256,7 @@ def validate_tax_breakup_sums(clean_data: List[Dict[str, Any]]) -> TaxBreakupSum
         total_cess += cess
         
         # Validate individual row
-        row_res = validate_row_tax_breakup(row, idx)
-        row_warnings = row_res.warnings
-        corrected_row = row_res.corrected_row
+        is_valid, row_warnings, corrected_row = validate_row_tax_breakup(row, idx)
         validated_rows.append(corrected_row)
         
         if row_warnings:
@@ -324,16 +279,7 @@ def validate_tax_breakup_sums(clean_data: List[Dict[str, Any]]) -> TaxBreakupSum
     igst_diff = abs(total_igst - expected_igst)
     cgst_sgst_diff = abs(total_cgst + total_sgst - expected_cgst_sgst * 2)
     
-    summary = TaxBreakupSummary(
-        total_rows=len(clean_data),
-        totals=TaxBreakupTotals(taxable_value=round2(total_taxable), igst=round2(total_igst), cgst=round2(total_cgst), sgst=round2(total_sgst), cess=round2(total_cess)),
-        expected_totals=ExpectedTotals(igst=round2(expected_igst), cgst_sgst=round2(expected_cgst_sgst * 2)),
-        discrepancies=Discrepancies(igst_diff=round2(igst_diff), cgst_sgst_diff=round2(cgst_sgst_diff)),
-        is_balanced=igst_diff <= TAX_TOLERANCE and cgst_sgst_diff <= TAX_TOLERANCE,
-        warnings=warnings[:10],
-        validated_rows=validated_rows
-    )
-    # removed old dict declaration
+    summary = {
         "total_rows": len(clean_data),
         "totals": {
             "taxable_value": round2(total_taxable),
@@ -372,7 +318,7 @@ def test_tax_breakup_validation():
         
         def test_inter_state_18_percent(self):
             """Test inter-state transaction with 18% rate."""
-            res = validate_tax_breakup_enhanced(
+            is_valid, error, result = validate_tax_breakup_enhanced(
                 taxable_value=10000,
                 rate=18,
                 igst=1800,
@@ -380,14 +326,14 @@ def test_tax_breakup_validation():
                 sgst=0,
                 is_inter_state=True,
             )
-            self.assertTrue(res.is_valid)
-            self.assertEqual(res.corrected_values.igst, 1800)
-            self.assertEqual(res.corrected_values.cgst, 0)
-            self.assertEqual(res.corrected_values.sgst, 0)
+            self.assertTrue(is_valid)
+            self.assertEqual(result["igst"], 1800)
+            self.assertEqual(result["cgst"], 0)
+            self.assertEqual(result["sgst"], 0)
         
         def test_inter_state_wrong_igst(self):
             """Test inter-state with incorrect IGST amount."""
-            res = validate_tax_breakup_enhanced(
+            is_valid, error, result = validate_tax_breakup_enhanced(
                 taxable_value=10000,
                 rate=18,
                 igst=1700,  # Wrong - should be 1800
@@ -395,13 +341,13 @@ def test_tax_breakup_validation():
                 sgst=0,
                 is_inter_state=True,
             )
-            self.assertFalse(res.is_valid)
-            self.assertIn("IGST mismatch", res.error_message)
-            self.assertEqual(res.corrected_values.igst, 1800)  # Should be corrected
+            self.assertFalse(is_valid)
+            self.assertIn("IGST mismatch", error)
+            self.assertEqual(result["igst"], 1800)  # Should be corrected
         
         def test_intra_state_18_percent(self):
             """Test intra-state transaction with 18% rate."""
-            res = validate_tax_breakup_enhanced(
+            is_valid, error, result = validate_tax_breakup_enhanced(
                 taxable_value=10000,
                 rate=18,
                 igst=0,
@@ -409,14 +355,14 @@ def test_tax_breakup_validation():
                 sgst=900,
                 is_inter_state=False,
             )
-            self.assertTrue(res.is_valid)
-            self.assertEqual(res.corrected_values.igst, 0)
-            self.assertEqual(res.corrected_values.cgst, 900)
-            self.assertEqual(res.corrected_values.sgst, 900)
+            self.assertTrue(is_valid)
+            self.assertEqual(result["igst"], 0)
+            self.assertEqual(result["cgst"], 900)
+            self.assertEqual(result["sgst"], 900)
         
         def test_intra_state_wrong_cgst_sgst(self):
             """Test intra-state with incorrect CGST+SGST."""
-            res = validate_tax_breakup_enhanced(
+            is_valid, error, result = validate_tax_breakup_enhanced(
                 taxable_value=10000,
                 rate=18,
                 igst=0,
@@ -424,13 +370,13 @@ def test_tax_breakup_validation():
                 sgst=900,
                 is_inter_state=False,
             )
-            self.assertFalse(res.is_valid)
-            self.assertIn("CGST mismatch", res.error_message)
-            self.assertEqual(res.corrected_values.cgst, 900)  # Should be corrected
+            self.assertFalse(is_valid)
+            self.assertIn("CGST mismatch", error)
+            self.assertEqual(result["cgst"], 900)  # Should be corrected
         
         def test_rounding_to_2_decimals(self):
             """Test that values are rounded to 2 decimal places."""
-            res = validate_tax_breakup_enhanced(
+            is_valid, error, result = validate_tax_breakup_enhanced(
                 taxable_value=10000,
                 rate=18,
                 igst=1800.001,
@@ -438,13 +384,13 @@ def test_tax_breakup_validation():
                 sgst=900.005,
                 is_inter_state=True,
             )
-            self.assertEqual(res.corrected_values.igst, 1800.00)
-            self.assertEqual(res.corrected_values.cgst, 900.01)
-            self.assertEqual(res.corrected_values.sgst, 900.01)
+            self.assertEqual(result["igst"], 1800.00)
+            self.assertEqual(result["cgst"], 900.01)
+            self.assertEqual(result["sgst"], 900.01)
         
         def test_export_zero_rate(self):
             """Test export with 0% rate."""
-            res = validate_tax_breakup_enhanced(
+            is_valid, error, result = validate_tax_breakup_enhanced(
                 taxable_value=50000,
                 rate=0,
                 igst=0,
@@ -452,14 +398,14 @@ def test_tax_breakup_validation():
                 sgst=0,
                 is_inter_state=True,
             )
-            self.assertTrue(res.is_valid)
-            self.assertEqual(res.corrected_values.igst, 0)
-            self.assertEqual(res.corrected_values.cgst, 0)
-            self.assertEqual(res.corrected_values.sgst, 0)
+            self.assertTrue(is_valid)
+            self.assertEqual(result["igst"], 0)
+            self.assertEqual(result["cgst"], 0)
+            self.assertEqual(result["sgst"], 0)
         
         def test_5_percent_rate(self):
             """Test 5% rate (CGST=2.5%, SGST=2.5%)."""
-            res = validate_tax_breakup_enhanced(
+            is_valid, error, result = validate_tax_breakup_enhanced(
                 taxable_value=10000,
                 rate=5,
                 igst=0,
@@ -467,10 +413,10 @@ def test_tax_breakup_validation():
                 sgst=250,
                 is_inter_state=False,
             )
-            self.assertTrue(res.is_valid)
-            self.assertEqual(res.corrected_values.igst, 0)
-            self.assertEqual(res.corrected_values.cgst, 250)
-            self.assertEqual(res.corrected_values.sgst, 250)
+            self.assertTrue(is_valid)
+            self.assertEqual(result["igst"], 0)
+            self.assertEqual(result["cgst"], 250)
+            self.assertEqual(result["sgst"], 250)
     
     # Run tests
     unittest.main(exit=False)

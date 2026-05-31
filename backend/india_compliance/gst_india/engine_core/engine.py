@@ -1,31 +1,6 @@
 # engine_core/engine.py
 
-from typing import List, Dict, Any, Optional
-
-from pydantic import BaseModel, Field
-import hashlib
-import json
-
-class RecordError(BaseModel):
-    row: int = 0
-    error_code: str
-    message: str
-    record: Dict[str, Any] = Field(default_factory=dict)
-
-class ValidRecord(BaseModel):
-    category: str
-    record_hash: str
-    data: Dict[str, Any]
-
-class EngineResult(BaseModel):
-    valid_records: List[ValidRecord] = Field(default_factory=list)
-    error_records: List[RecordError] = Field(default_factory=list)
-    summary: Dict[str, Any] = Field(default_factory=dict)
-
-def calculate_row_hash(row_dict: Dict[str, Any]) -> str:
-    serialized = json.dumps(row_dict, sort_keys=True, default=str)
-    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
-
+from typing import List, Dict, Any
 import pandas as pd
 
 from .input_adapter import adapt_input_dataframe
@@ -74,40 +49,16 @@ class GSTR1Engine:
                 "final_status": getattr(validation_report, "final_status", "unknown"),
             }
 
-        engine_result = EngineResult()
-        
-        categories = ["b2b", "b2cl", "b2cs", "exp", "cdnr", "cdnur", "nil_exempt"]
-        processed_hashes = set()
-        
-        for category in categories:
-            if category in gstr1_tables:
-                items = gstr1_tables[category]
-                if isinstance(items, list):
-                    for item in items:
-                        rec_hash = calculate_row_hash(item)
-                        if rec_hash not in processed_hashes:
-                            processed_hashes.add(rec_hash)
-                            engine_result.valid_records.append(ValidRecord(category=category, record_hash=rec_hash, data=item))
-                elif isinstance(items, dict):
-                    # Some tables might be grouped by GSTIN
-                    for key, item in items.items():
-                        rec_hash = calculate_row_hash(item)
-                        if rec_hash not in processed_hashes:
-                            processed_hashes.add(rec_hash)
-                            engine_result.valid_records.append(ValidRecord(category=category, record_hash=rec_hash, data=item))
+        if hasattr(input_validation_report, "to_dict"):
+            gstr1_tables["input_validation_report"] = input_validation_report.to_dict()
+        else:
+            gstr1_tables["input_validation_report"] = {
+                "errors": getattr(input_validation_report, "errors", []),
+                "warnings": getattr(input_validation_report, "warnings", []),
+                "is_valid": getattr(input_validation_report, "is_valid", True),
+            }
 
-        # Handle errors
-        in_errors = getattr(input_validation_report, "errors", [])
-        for err in in_errors:
-            engine_result.error_records.append(RecordError(error_code="INPUT_ERROR", message=str(err)))
-            
-        gen_errors = getattr(validation_report, "errors", [])
-        for err in gen_errors:
-            engine_result.error_records.append(RecordError(error_code="GEN_ERROR", message=str(err)))
-
-        engine_result.summary = gstr1_tables.get("summary", {})
-        
-        return engine_result.model_dump()
+        return gstr1_tables
 
     def run_from_excel(self, file_path: str) -> Dict[str, Any]:
         df = pd.read_excel(file_path)

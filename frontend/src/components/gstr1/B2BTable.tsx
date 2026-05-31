@@ -1,10 +1,10 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { useState, useMemo, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { TablePagination } from '@/components/invoices/TablePagination';
 import { 
   ChevronDown, 
   ChevronRight, 
@@ -23,7 +23,6 @@ import {
   CollapsibleContent, 
   CollapsibleTrigger 
 } from '@/components/ui/collapsible';
-import { EditableCell } from './EditableCell';
 import type { B2BCustomer, B2BInvoice } from '@/hooks/useGSTR1Data';
 
 interface B2BTableProps {
@@ -224,92 +223,135 @@ function EditableInvoiceRow({
   customerGstin: string;
   onInvoiceUpdate?: (invoice: B2BInvoice, customerGstin: string) => void;
 }) {
-  const [isDeleting, setIsDeleting] = useState(false);
-  const store = (window as any).__gstr1Store__; // Hacky way to access store without hook if needed, but we can pass errors down or just use the hook
-  
-  // For Phase 4, we assume errors are passed or we fetch them from Zustand store
-  // To avoid breaking hooks rules, we'll just implement the UI here and let the parent pass errors if needed, 
-  // or we can import the hook if we inject it.
-  
-  const handleCellChange = (field: keyof B2BInvoice, value: string | number) => {
-    const updatedInvoice = { ...invoice, [field]: value };
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedInvoice, setEditedInvoice] = useState(invoice);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Sync editedInvoice when invoice prop changes
+  useEffect(() => {
+    setEditedInvoice(invoice);
+  }, [invoice]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
     
-    // Automatically save on cell blur
-    if (onInvoiceUpdate) {
-      onInvoiceUpdate(updatedInvoice, customerGstin);
+    try {
+      // Phase E3: Optimistic UI - update state immediately
+      onInvoiceUpdate?.(editedInvoice, customerGstin);
+      
+      // Simulate async persistence (in real app, this would be an API call)
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // In a real app, you would call an API here:
+      // await apiUpdateInvoice(editedInvoice);
+      
+      console.log('Invoice saved successfully:', editedInvoice);
+      setIsEditing(false);
+    } catch (error) {
+      console.error('Failed to save invoice:', error);
+      // Phase E3: Rollback on failure - restore original value
+      setEditedInvoice(invoice);
+      alert('Failed to save changes. Please try again.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  // Check for errors related to this invoice
-  // In a real app, we'd lookup the error from the Zustand store based on invoice number
-  // For demonstration, we'll assume no error unless injected via props (which we could add)
-  const getError = (field: string) => {
-    // Return error string if there is one for this field
-    return null;
-  };
+  const inputClass = "h-7 text-xs w-24";
+
+  if (isEditing) {
+    return (
+      <TableRow className="text-sm">
+        <TableCell>
+          <Input 
+            value={editedInvoice.invoiceNumber} 
+            onChange={(e) => setEditedInvoice({...editedInvoice, invoiceNumber: e.target.value})}
+            className={inputClass}
+          />
+        </TableCell>
+        <TableCell>
+          <Input 
+            type="date"
+            value={editedInvoice.invoiceDate?.split('T')[0] || ''} 
+            onChange={(e) => setEditedInvoice({...editedInvoice, invoiceDate: e.target.value})}
+            className={inputClass}
+          />
+        </TableCell>
+        <TableCell>
+          <Input 
+            value={editedInvoice.placeOfSupply || ''} 
+            onChange={(e) => setEditedInvoice({...editedInvoice, placeOfSupply: e.target.value})}
+            className={inputClass}
+          />
+        </TableCell>
+        <TableCell>
+          <Input 
+            type="number"
+            value={editedInvoice.taxableValue} 
+            onChange={(e) => setEditedInvoice({...editedInvoice, taxableValue: parseFloat(e.target.value) || 0})}
+            className={`${inputClass} text-right`}
+          />
+        </TableCell>
+        <TableCell>
+          <Input 
+            type="number"
+            value={editedInvoice.igst} 
+            onChange={(e) => setEditedInvoice({...editedInvoice, igst: parseFloat(e.target.value) || 0})}
+            className={`${inputClass} text-right`}
+          />
+        </TableCell>
+        <TableCell>
+          <Input 
+            type="number"
+            value={editedInvoice.cgst} 
+            onChange={(e) => setEditedInvoice({...editedInvoice, cgst: parseFloat(e.target.value) || 0})}
+            className={`${inputClass} text-right`}
+          />
+        </TableCell>
+        <TableCell>
+          <Input 
+            type="number"
+            value={editedInvoice.sgst} 
+            onChange={(e) => setEditedInvoice({...editedInvoice, sgst: parseFloat(e.target.value) || 0})}
+            className={`${inputClass} text-right`}
+          />
+        </TableCell>
+        <TableCell className="text-right font-medium">
+          {formatCurrency(editedInvoice.invoiceValue)}
+        </TableCell>
+        <TableCell>
+          <div className="flex items-center gap-1 justify-center">
+            <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-green-600" onClick={handleSave} disabled={isSaving}>
+              {isSaving ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Save className="h-3 w-3" />
+              )}
+            </Button>
+            <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-red-600" onClick={() => setIsEditing(false)} disabled={isSaving}>
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  }
 
   return (
-    <TableRow className="text-sm hover:bg-slate-50 dark:hover:bg-slate-800/50">
-      <TableCell className="p-0">
-        <EditableCell 
-          value={invoice.invoiceNumber} 
-          onChange={(val) => handleCellChange('invoiceNumber', String(val))} 
-          className="font-medium"
-          errorTooltip={getError('invoiceNumber')}
-        />
-      </TableCell>
-      <TableCell className="p-0">
-        <EditableCell 
-          value={invoice.invoiceDate?.split('T')[0] || ''} 
-          type="date"
-          onChange={(val) => handleCellChange('invoiceDate', String(val))} 
-          errorTooltip={getError('invoiceDate')}
-        />
-      </TableCell>
-      <TableCell className="p-0">
-        <EditableCell 
-          value={invoice.placeOfSupply || ''} 
-          onChange={(val) => handleCellChange('placeOfSupply', String(val))} 
-          errorTooltip={getError('placeOfSupply')}
-        />
-      </TableCell>
-      <TableCell className="p-0 text-right">
-        <EditableCell 
-          value={invoice.taxableValue} 
-          type="number"
-          onChange={(val) => handleCellChange('taxableValue', Number(val))} 
-          errorTooltip={getError('taxableValue')}
-        />
-      </TableCell>
-      <TableCell className="p-0 text-right">
-        <EditableCell 
-          value={invoice.igst} 
-          type="number"
-          onChange={(val) => handleCellChange('igst', Number(val))} 
-          errorTooltip={getError('igst')}
-        />
-      </TableCell>
-      <TableCell className="p-0 text-right">
-        <EditableCell 
-          value={invoice.cgst} 
-          type="number"
-          onChange={(val) => handleCellChange('cgst', Number(val))} 
-          errorTooltip={getError('cgst')}
-        />
-      </TableCell>
-      <TableCell className="p-0 text-right">
-        <EditableCell 
-          value={invoice.sgst} 
-          type="number"
-          onChange={(val) => handleCellChange('sgst', Number(val))} 
-          errorTooltip={getError('sgst')}
-        />
-      </TableCell>
-      <TableCell className="p-2 text-right font-medium">
-        {new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(invoice.invoiceValue)}
-      </TableCell>
-      <TableCell className="p-2">
+    <TableRow className="text-sm">
+      <TableCell className="font-medium">{invoice.invoiceNumber}</TableCell>
+      <TableCell>{formatDate(invoice.invoiceDate)}</TableCell>
+      <TableCell>{invoice.placeOfSupply || '-'}</TableCell>
+      <TableCell className="text-right">{formatCurrency(invoice.taxableValue)}</TableCell>
+      <TableCell className="text-right">{formatCurrency(invoice.igst)}</TableCell>
+      <TableCell className="text-right">{formatCurrency(invoice.cgst)}</TableCell>
+      <TableCell className="text-right">{formatCurrency(invoice.sgst)}</TableCell>
+      <TableCell className="text-right">{formatCurrency(invoice.invoiceValue)}</TableCell>
+      <TableCell>
         <div className="flex items-center gap-1 justify-center">
+          <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setIsEditing(true)}>
+            <Edit3 className="h-3 w-3" />
+          </Button>
           <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-red-600">
             <Trash2 className="h-3 w-3" />
           </Button>
@@ -318,11 +360,13 @@ function EditableInvoiceRow({
     </TableRow>
   );
 }
+
 export function B2BTable({ data, onDataChange, onInvoiceUpdate }: B2BTableProps) {
   const [filterGstin, setFilterGstin] = useState('');
   const [filterName, setFilterName] = useState('');
   const [showFilters, setShowFilters] = useState(false);
-
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // Filter data based on search
   const filteredData = useMemo(() => {
@@ -335,16 +379,13 @@ export function B2BTable({ data, onDataChange, onInvoiceUpdate }: B2BTableProps)
     });
   }, [data, filterGstin, filterName]);
 
+  // Paginate filtered data
+  const paginatedData = useMemo(() => {
+    const startIndex = (currentPage - 1) * pageSize;
+    return filteredData.slice(startIndex, startIndex + pageSize);
+  }, [filteredData, currentPage, pageSize]);
 
-
-  const parentRef = useRef<HTMLDivElement>(null);
-
-  const rowVirtualizer = useVirtualizer({
-    count: filteredData.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 50,
-    overscan: 10,
-  });
+  const totalPages = Math.ceil(filteredData.length / pageSize);
 
   const handleUpdateCustomer = (updatedCustomer: B2BCustomer) => {
     if (onDataChange) {
@@ -477,6 +518,15 @@ export function B2BTable({ data, onDataChange, onInvoiceUpdate }: B2BTableProps)
         </div>
       </div>
 
+      {/* Pagination */}
+      <TablePagination
+        currentPage={currentPage}
+        totalPages={totalPages}
+        pageSize={pageSize}
+        totalItems={filteredData.length}
+        onPageChange={setCurrentPage}
+        onPageSizeChange={(size) => { setPageSize(size); setCurrentPage(1); }}
+      />
 
       {/* Summary Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -515,10 +565,7 @@ export function B2BTable({ data, onDataChange, onInvoiceUpdate }: B2BTableProps)
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div 
-            ref={parentRef} 
-            className="rounded-md border max-h-[500px] overflow-auto"
-          >
+          <div className="rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -531,21 +578,16 @@ export function B2BTable({ data, onDataChange, onInvoiceUpdate }: B2BTableProps)
                   <TableHead className="text-center">Actions</TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: 'relative' }}>
-                {rowVirtualizer.getVirtualItems().length > 0 ? (
-                  rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                    const customer = filteredData[virtualRow.index];
-                    return (
-                      <EditableCustomerRow 
-                        key={customer.customerGstin} 
-                        customer={customer}
-                        onUpdate={handleUpdateCustomer}
-                        onDelete={handleDeleteCustomer}
-                        onInvoiceUpdate={handleInvoiceUpdate}
-                      />
-                    );
-                  })
-                ) : null}
+              <TableBody>
+                {paginatedData.map((customer) => (
+                  <EditableCustomerRow 
+                    key={customer.customerGstin} 
+                    customer={customer}
+                    onUpdate={handleUpdateCustomer}
+                    onDelete={handleDeleteCustomer}
+                    onInvoiceUpdate={handleInvoiceUpdate}
+                  />
+                ))}
               </TableBody>
             </Table>
           </div>

@@ -8,7 +8,6 @@
 
 import React, { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { useNavigate } from 'react-router-dom';
 import { 
   Upload, 
   FileSpreadsheet, 
@@ -32,39 +31,20 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { parseExcelFile, autoMapColumns, type ColumnMapping } from '@/lib/excel-parser';
-import { uploadGstr1File } from '@/lib/api';
-import { useActiveBusiness, useActiveWorkspace } from '@/store/tenantStore';
-import { useGstr1Store } from '@/store/gstr1Store';
 
 // Props
 interface GSTR1ImportDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onImport: (file: File, mapping: Partial<ColumnMapping>) => void;
-  workspaceId?: string;
-  gstin?: string;
-  returnPeriod?: string;
 }
 
 export default function GSTR1ImportDrawer({ 
   open, 
   onOpenChange, 
-  onImport,
-  workspaceId: workspaceIdProp,
-  gstin: gstinProp,
-  returnPeriod: returnPeriodProp
+  onImport 
 }: GSTR1ImportDrawerProps) {
   const { toast } = useToast();
-  const navigate = useNavigate();
-  const activeWorkspace = useActiveWorkspace();
-  const activeBusiness = useActiveBusiness();
-  const activeGstin = gstinProp || activeBusiness?.gstin || '';
-  const workspaceId = workspaceIdProp || activeWorkspace?.id || '';
-  const returnPeriod = returnPeriodProp || useGstr1Store((state) => state.returnPeriod) || '';
-  const setCurrentStep = useGstr1Store((state) => state.setCurrentStep);
-  const setGstr1Data = useGstr1Store((state) => state.setGstr1Data);
-  const setSchemaErrors = useGstr1Store((state) => state.setSchemaErrors);
-  const clearSchemaErrors = useGstr1Store((state) => state.clearSchemaErrors);
   const [file, setFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [parsedHeaders, setParsedHeaders] = useState<string[]>([]);
@@ -104,76 +84,18 @@ export default function GSTR1ImportDrawer({
     },
     maxFiles: 1,
   });
-
+  
   // Handle import
-  const handleImport = async () => {
+  const handleImport = () => {
     if (!file) return;
-
-    if (!workspaceId || !activeGstin || !returnPeriod) {
-      toast({
-        title: 'Missing Context',
-        description: 'Please select a Workspace, GSTIN, and Return Period before uploading.',
-        variant: 'destructive',
-      });
-      return;
-    }
     
     const mapping = autoMapColumns(parsedHeaders) as ColumnMapping;
-
-    setIsLoading(true);
-    try {
-      const result = await uploadGstr1File(workspaceId, activeGstin, returnPeriod, file);
-
-      if (!result.success && result.errors?.length > 0) {
-        setSchemaErrors(result.errors);
-        setCurrentStep('checking-errors');
-        onOpenChange(false);
-        navigate('/gstr1', {
-          state: {
-            gstin: activeGstin,
-            returnPeriod,
-            step: 'checking-errors',
-            fromDrawer: true,
-          },
-        });
-
-        const uniqueRows = new Set(
-          result.errors.map((error: any) => error.row ?? error.row_number ?? error.loc?.[1]).filter(Boolean)
-        );
-
-        toast({
-          title: 'Upload requires review',
-          description: `Found errors in ${uniqueRows.size || result.errors.length} rows. Please review the data.`,
-        });
-        return;
-      }
-
-      clearSchemaErrors();
-
-      if (result.data?.summary && result.data?.tables) {
-        setGstr1Data(result.data.summary, result.data.tables);
-        setCurrentStep('summary');
-      }
-
-      toast({
-        title: 'Upload Complete',
-        description: `${Number(result.data?.summary?.total_record_count ?? result.parsed_records ?? 0)} rows calculated successfully.`,
-      });
-
-      onImport(file, mapping);
-      onOpenChange(false);
-
-      setFile(null);
-      setParsedHeaders([]);
-    } catch (error) {
-      toast({
-        title: 'File schema validation failed',
-        description: error instanceof Error ? error.message : 'Failed to validate file',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsLoading(false);
-    }
+    onImport(file, mapping);
+    onOpenChange(false);
+    
+    // Reset state
+    setFile(null);
+    setParsedHeaders([]);
   };
   
   // Handle clear

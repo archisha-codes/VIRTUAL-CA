@@ -273,25 +273,8 @@ export default function Workspaces() {
           category: 'b2b'
         });
       } else {
-        let errMsg = 'Failed to add GSTIN';
-        try {
-          const errorData = await response.json();
-          if (errorData) {
-            if (Array.isArray(errorData.detail)) {
-              errMsg = errorData.detail.map((err: any) => err.msg || err.message || JSON.stringify(err)).join(', ');
-            } else if (typeof errorData.detail === 'string') {
-              errMsg = errorData.detail;
-            } else if (errorData.message) {
-              errMsg = errorData.message;
-            } else {
-              errMsg = JSON.stringify(errorData);
-            }
-          }
-        } catch (jsonErr) {
-          const text = await response.text().catch(() => '');
-          errMsg = text || `HTTP Error: ${response.status}`;
-        }
-        throw new Error(errMsg);
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to add GSTIN');
       }
     } catch (error) {
       console.error('Failed to add GSTIN:', error);

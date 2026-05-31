@@ -115,20 +115,8 @@ def aggregate_hsn(df):
     if df.empty:
         return pd.DataFrame()
     
-    # Ensure hsn_code has no NaNs/empty before groupby
-    if 'hsn_code' in df.columns:
-        df['hsn_code'] = df['hsn_code'].fillna('999999-MISSING')
-        df.loc[df['hsn_code'].astype(str).str.strip() == '', 'hsn_code'] = '999999-MISSING'
-        df.loc[df['hsn_code'].astype(str).str.lower() == 'nan', 'hsn_code'] = '999999-MISSING'
-    else:
-        df['hsn_code'] = '999999-MISSING'
-
-    # Ensure quantity has no NaNs
-    if 'quantity' in df.columns:
-        df['quantity'] = df['quantity'].fillna(0.0)
-    
     grouped = (
-        df.groupby("hsn_code", dropna=False)
+        df.groupby("hsn_code")
         .agg(
             {
                 "quantity": "sum",
@@ -144,13 +132,9 @@ def aggregate_hsn(df):
 
     return grouped
 
-def calculate_tax_totals(df) -> Dict[str, float]:
-    """Calculate total tax amounts (IGST, CGST, SGST, CESS).
 
-    Uses ``float()`` via explicit conversion so that both ``Decimal`` and
-    ``float`` column dtypes are handled without raising a ``TypeError``
-    (``unsupported operand type(s) for +: 'decimal.Decimal' and 'float'``).
-    """
+def calculate_tax_totals(df) -> Dict[str, float]:
+    """Calculate total tax amounts (IGST, CGST, SGST, CESS)."""
     if df.empty:
         return {
             "total_igst": 0.0,
@@ -159,23 +143,12 @@ def calculate_tax_totals(df) -> Dict[str, float]:
             "total_cess": 0.0,
             "total_tax": 0.0,
         }
-
-    def _safe_sum(col: str) -> float:
-        """Sum a column that may contain Decimal, float, or int values."""
-        if col not in df.columns:
-            return 0.0
-        # pandas .sum() on object/Decimal columns returns a Decimal; cast to float.
-        try:
-            raw = df[col].apply(lambda v: float(v) if v is not None else 0.0).sum()
-        except (TypeError, ValueError):
-            raw = 0.0
-        return float(raw) if raw is not None else 0.0
-
-    total_igst = _safe_sum("igst")
-    total_cgst = _safe_sum("cgst")
-    total_sgst = _safe_sum("sgst")
-    total_cess = _safe_sum("cess")
-
+    
+    total_igst = float(df["igst"].sum() or 0)
+    total_cgst = float(df["cgst"].sum() or 0)
+    total_sgst = float(df["sgst"].sum() or 0)
+    total_cess = float(df["cess"].sum() or 0)
+    
     return {
         "total_igst": round(total_igst, 2),
         "total_cgst": round(total_cgst, 2),

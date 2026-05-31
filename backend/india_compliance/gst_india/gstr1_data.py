@@ -1,6 +1,5 @@
 # backend/india_compliance/gst_india/gstr1_data.py
 
-# pyright: reportGeneralTypeIssues=false, reportAssignmentType=false, reportCallIssue=false, reportOperatorIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false
 """
 GSTR-1 Data Aggregation Module
 
@@ -14,7 +13,7 @@ Optimized for large datasets (10,000+ rows) with memory-efficient aggregation.
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple, Generator
 from collections import defaultdict
-from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+from decimal import Decimal, ROUND_HALF_UP
 import time
 
 import pandas as pd
@@ -59,77 +58,6 @@ CESS_RATES = {
 }
 
 
-_TAX_COLUMNS_SET = frozenset(
-    ("taxable_value", "igst", "cgst", "sgst", "cess", "invoice_value")
-)
-
-
-def _to_decimal_safe(val: Any) -> Decimal:
-    """Convert a scalar to Decimal, returning Decimal('0.00') on failure."""
-    if isinstance(val, Decimal):
-        return val
-    if val is None:
-        return Decimal("0.00")
-    try:
-        if pd.isna(val):
-            return Decimal("0.00")
-    except (TypeError, ValueError):
-        pass
-    try:
-        return Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    except (InvalidOperation, ValueError, TypeError):
-        return Decimal("0.00")
-
-
-def _decimal_safe_records(df: "pd.DataFrame") -> List[Dict[str, Any]]:
-    """
-    Convert a DataFrame to a list of dicts while preserving Decimal precision
-    in financial columns.
-
-    ``df.to_dict('records')`` silently converts ``object``-dtype Decimal cells
-    back to Python ``float`` via NumPy. This wrapper:
-
-    1. Calls ``to_dict('records')`` for speed on non-financial columns.
-    2. Re-applies ``_to_decimal_safe()`` on every financial column (TAX_COLUMNS)
-       so that downstream arithmetic never receives a raw float.
-
-    Non-financial columns (strings, dates, etc.) are unchanged.
-    """
-    records = df.to_dict("records")
-    financial_cols = [c for c in df.columns if c in _TAX_COLUMNS_SET]
-    if not financial_cols:
-        return records
-    for rec in records:
-        for col in financial_cols:
-            if col in rec:
-                rec[col] = _to_decimal_safe(rec[col])
-    return records
-
-
-def _fillna_df_safe(df: "pd.DataFrame") -> "pd.DataFrame":
-    """
-    Fill NaN values in a DataFrame without clobbering Decimal columns.
-
-    * Financial columns (TAX_COLUMNS): fill with ``Decimal('0.00')``.
-    * All other columns: fill with empty string.
-
-    Using a blanket ``df.fillna("")`` would replace ``Decimal`` objects with
-    the string ``""`` and subsequently convert the column dtype to ``object``
-    (str), which silently breaks all downstream arithmetic.
-    """
-    df = df.copy()
-    for col in df.columns:
-        if col in _TAX_COLUMNS_SET:
-            df[col] = df[col].apply(
-                lambda v: _to_decimal_safe(v)
-                if (v is None or (not isinstance(v, Decimal) and pd.isna(v)))
-                else v
-            )
-        else:
-            df[col] = df[col].fillna("")
-    return df
-
-
 def money(value: Any) -> float:
     """
     Convert value to Decimal and quantize to 2 decimal places using ROUND_HALF_UP.
@@ -146,7 +74,7 @@ def money(value: Any) -> float:
         return 0.0
 
 
-def calculate_taxable_from_inclusive(invoice_value: Any, rate: Any) -> Tuple[float, float]:
+def calculate_taxable_from_inclusive(invoice_value: float, rate: float) -> Tuple[float, float]:
     """
     Calculate taxable value and tax from inclusive invoice value.
     
@@ -157,18 +85,12 @@ def calculate_taxable_from_inclusive(invoice_value: Any, rate: Any) -> Tuple[flo
     Returns:
         Tuple of (taxable_value, tax_amount)
     """
-    try:
-        dec_val = Decimal(str(invoice_value)) if invoice_value is not None else Decimal('0.00')
-        dec_rate = Decimal(str(rate)) if rate is not None else Decimal('0.00')
-    except (ValueError, TypeError, ArithmeticError):
+    if rate <= 0 or invoice_value <= 0:
         return 0.0, 0.0
     
-    if dec_rate <= Decimal('0.00') or dec_val <= Decimal('0.00'):
-        return 0.0, 0.0
-    
-    divisor = Decimal('1') + (dec_rate / Decimal('100'))
-    taxable = dec_val / divisor
-    tax = dec_val - taxable
+    divisor = 1 + (rate / 100)
+    taxable = invoice_value / divisor
+    tax = invoice_value - taxable
     
     return money(taxable), money(tax)
 
@@ -249,10 +171,10 @@ def determine_service_pos(
 
 
 def validate_rate_vs_tax_consistency(
-    taxable_value: Any,
-    rate: Any,
-    provided_tax: Any,
-    tolerance: Any = 0.10
+    taxable_value: float,
+    rate: float,
+    provided_tax: float,
+    tolerance: float = 0.10
 ) -> Tuple[bool, str]:
     """
     ADD 3: Validate rate vs tax consistency.
@@ -268,34 +190,25 @@ def validate_rate_vs_tax_consistency(
     Returns:
         Tuple of (is_valid, message)
     """
-    try:
-        dec_taxable = Decimal(str(taxable_value)) if taxable_value is not None else Decimal('0.00')
-        dec_rate = Decimal(str(rate)) if rate is not None else Decimal('0.00')
-        dec_provided = Decimal(str(provided_tax)) if provided_tax is not None else Decimal('0.00')
-        dec_tolerance = Decimal(str(tolerance)) if tolerance is not None else Decimal('0.10')
-    except (ValueError, TypeError, ArithmeticError):
-        return True, "Skipped - invalid numbers"
-        
-    if dec_taxable <= Decimal('0.00') or dec_rate <= Decimal('0.00'):
+    if taxable_value <= 0 or rate <= 0:
         return True, "Skipped - zero values"
     
     # Calculate expected tax
-    # Update all tax rate math to cast the rate to a Decimal first: taxable_value * (Decimal(str(rate)) / Decimal('100'))
-    expected_tax = dec_taxable * (dec_rate / Decimal('100'))
+    expected_tax = taxable_value * rate / 100
     
     # Calculate difference
-    diff = abs(dec_provided - expected_tax)
+    diff = abs(provided_tax - expected_tax)
     
     # Check within tolerance
-    if diff <= dec_tolerance:
-        return True, f"Valid: rate={dec_rate}% matches tax={dec_provided}"
+    if diff <= tolerance:
+        return True, f"Valid: rate={rate}% matches tax={provided_tax}"
     
     # Calculate actual rate from provided tax
-    actual_rate = (dec_provided / dec_taxable) * Decimal('100') if dec_taxable > Decimal('0.00') else Decimal('0.00')
+    actual_rate = (provided_tax / taxable_value) * 100 if taxable_value > 0 else 0
     
     return False, (
-        f"Tax mismatch: expected {float(expected_tax):.2f} ({dec_rate}%), "
-        f"got {float(dec_provided):.2f} ({float(actual_rate):.2f}%), diff={float(diff):.2f}"
+        f"Tax mismatch: expected {expected_tax:.2f} ({rate}%), "
+        f"got {provided_tax:.2f} ({actual_rate:.2f}%), diff={diff:.2f}"
     )
 
 
@@ -495,18 +408,11 @@ def normalize_row_fields(row: Dict[str, Any]) -> Dict[str, Any]:
                 if alias in normalized:
                     normalized[std_key] = normalized[alias]
                     break
-
-        # Apply strict numeric parsing for financial fields.
-        # ── IMPORTANT: preserve Decimal values as-is so that the Decimal pipeline
-        #    (cast_tax_columns_to_decimal) remains consistent all the way through.
-        #    Only convert non-Decimal values to float to avoid a later
-        #    'decimal.Decimal + float' TypeError. ──
+                    
+        # Apply strict float parsing for financial fields to avoid empty string processing errors
         if std_key in normalized:
             val = normalized[std_key]
-            from decimal import Decimal as _Decimal
-            if isinstance(val, _Decimal):
-                pass  # Already Decimal — keep it
-            elif pd.isna(val) or val is None or str(val).strip() == '':
+            if pd.isna(val) or val is None or str(val).strip() == '':
                 normalized[std_key] = 0.0
             else:
                 try:
@@ -655,6 +561,13 @@ def get_invoice_category(row: Dict[str, Any], company_gstin: str = "") -> Tuple[
     if is_credit_note or is_debit_note_type:
         if gstin:
             # Registered recipient - CDNR
+            if gst_category == "Deemed Export":
+                logger.debug(f"Note classified as B2B/DE: gstin={gstin[:6] if gstin else 'N/A'}...")
+                return (GSTR1_Category.B2B.value, GSTR1_SubCategory.DE.value)
+            elif gst_category == "SEZ":
+                return (GSTR1_Category.B2B.value, GSTR1_SubCategory.SEZWP.value if row.get("is_export_with_gst") else GSTR1_SubCategory.SEZWOP.value)
+            elif is_reverse_charge:
+                return (GSTR1_Category.B2B.value, GSTR1_SubCategory.B2B_REVERSE_CHARGE.value)
             note_type = "Credit Note" if is_credit_note else "Debit Note"
             logger.debug(f"Note classified as CDNR: {note_type}, gstin={gstin[:6] if gstin else 'N/A'}...")
             return (GSTR1_Category.CDNR.value, GSTR1_SubCategory.CDNR.value)
@@ -875,8 +788,6 @@ def format_invoice_for_cdnr(row: Dict[str, Any]) -> Dict[str, Any]:
         cgst = abs(cgst)
         sgst = abs(sgst)
         cess = abs(cess)
-        
-    is_rcm = str(row.get("reverse_charge", "")).upper() in ("Y", "YES", "TRUE", "1")
     
     return {
         GovDataField.CUST_GSTIN: row.get("gstin", ""),
@@ -885,7 +796,7 @@ def format_invoice_for_cdnr(row: Dict[str, Any]) -> Dict[str, Any]:
         "nt_ty": note_type,
         "val": abs(note_value),
         GovDataField.POS: extract_state_code(row.get("place_of_supply")),
-        GovDataField.REVERSE_CHARGE: "Y" if is_rcm else "N",
+        GovDataField.REVERSE_CHARGE: "Y" if row.get("reverse_charge") else "N",
         GovDataField.INVOICE_TYPE: row.get("invoice_type", "Regular"),
         "original_invoice_number": row.get("original_invoice_number", ""),
         "original_invoice_date": format_date_for_gstr(row.get("original_invoice_date")),
@@ -991,38 +902,15 @@ def format_invoice_for_cdnur(row: Dict[str, Any]) -> Dict[str, Any]:
 def aggregate_hsn_summary(clean_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Aggregate data by HSN Code + Rate for HSN summary table."""
     start_time = time.time()
-
+    
     # Safe DataFrame conversion with scrubbing
-    import pandas as pd
-    if isinstance(clean_data, pd.DataFrame):
-        df = clean_data.copy()
-        if 'hsn_code' in df.columns:
-            df['hsn_code'] = df['hsn_code'].fillna('999999-MISSING')
-            df.loc[df['hsn_code'].astype(str).str.strip() == '', 'hsn_code'] = '999999-MISSING'
-            df.loc[df['hsn_code'].astype(str).str.lower() == 'nan', 'hsn_code'] = '999999-MISSING'
-        else:
-            df['hsn_code'] = '999999-MISSING'
-
-        if 'quantity' in df.columns:
-            df['quantity'] = df['quantity'].fillna(Decimal('0.00'))
-
-        # ── Use Decimal-safe conversion so financial columns keep Decimal dtype ──
-        try:
-            clean_data = _decimal_safe_records(df)
-        except Exception as e:
-            logger.warning(f"Failed to convert DataFrame to Decimal-safe records: {e}")
-            clean_data = df.to_dict('records')
-    elif hasattr(clean_data, "fillna") and callable(getattr(clean_data, "fillna")):
-        # Partial DataFrame-like object — apply column-selective fill
-        try:
-            clean_data = _fillna_df_safe(clean_data)
-        except Exception:
-            clean_data = clean_data.fillna("")
+    if hasattr(clean_data, "fillna") and callable(getattr(clean_data, "fillna")):
+        clean_data = clean_data.fillna("")
     if hasattr(clean_data, "to_dict") and callable(getattr(clean_data, "to_dict")):
         try:
-            clean_data = _decimal_safe_records(clean_data)
+            clean_data = clean_data.to_dict('records')
         except Exception as e:
-            logger.warning(f"Failed to convert DataFrame to Decimal-safe records: {e}")
+            logger.warning(f"Failed to convert DataFrame to dict records: {e}")
 
     if clean_data is None or len(clean_data) == 0:
         return []
@@ -1031,8 +919,8 @@ def aggregate_hsn_summary(clean_data: List[Dict[str, Any]]) -> List[Dict[str, An
     
     for row in clean_data:
         hsn_code = str(row.get("hsn_code", row.get("gst_hsn_code", ""))).strip()
-        if not hsn_code or hsn_code.lower() in ("nan", "none", "null", ""):
-            hsn_code = "999999-MISSING"
+        if not hsn_code or hsn_code == "nan":
+            continue
         
         rate = flt(row.get("rate", 0))
         if rate <= 0:
@@ -1134,272 +1022,180 @@ def aggregate_hsn_summary(clean_data: List[Dict[str, Any]]) -> List[Dict[str, An
     return hsn_records
 
 
-# ---------------------------------------------------------------------------
-# SINGLE SOURCE OF TRUTH — GSTR-1 Net Liability Calculator
-# Formula: (B2B + B2CL + B2CS + EXP) − (CDNR + CDNUR)
-# RCM rows: included in taxable_value, EXCLUDED from tax heads (Table 4B).
-# ---------------------------------------------------------------------------
-
-def _extract_item_amounts(item: Dict[str, Any]) -> Tuple[float, float, float, float, float]:
-    """Return (txval, igst, cgst, sgst, cess) from a rate-item or flat-invoice dict."""
-    txval = flt(item.get("txval", item.get("taxableValue", item.get("taxable_value", 0))))
-    igst  = flt(item.get("iamt",  item.get("igst",  item.get("igst_amount",  0))))
-    cgst  = flt(item.get("camt",  item.get("cgst",  item.get("cgst_amount",  0))))
-    sgst  = flt(item.get("samt",  item.get("sgst",  item.get("sgst_amount",  0))))
-    cess  = flt(item.get("csamt", item.get("cess",  item.get("cess_amount",  0))))
-    return txval, igst, cgst, sgst, cess
-
-
-def _is_rcm(invoice: Dict[str, Any]) -> bool:
-    """Return True when the invoice is subject to Reverse Charge."""
-    rchrg = str(invoice.get("rchrg", invoice.get("reverse_charge", "N"))).upper()
-    return rchrg in ("Y", "YES", "TRUE", "1")
-
-
-def _accumulate(acc: Dict[str, float], txval: float, igst: float, cgst: float,
-                sgst: float, cess: float, is_rcm_row: bool, sign: int = 1) -> None:
-    """
-    Add signed amounts into the accumulator.
-    RCM rows contribute to taxable value (sign applied) but NOT to tax heads.
-    Non-RCM rows contribute to both.
-    sign = +1 for supply tables, -1 for credit/debit note tables.
-    """
-    acc["taxable_value"] += sign * txval          # RCM always counted in taxable
-    if is_rcm_row:
-        acc["rcm_taxable"] += sign * txval
-        acc["rcm_igst"]    += sign * igst
-        acc["rcm_cgst"]    += sign * cgst
-        acc["rcm_sgst"]    += sign * sgst
-        acc["rcm_cess"]    += sign * cess
-    else:
-        acc["igst"] += sign * igst
-        acc["cgst"] += sign * cgst
-        acc["sgst"] += sign * sgst
-        acc["cess"] += sign * cess
-
-
-def _process_invoice(acc: Dict[str, float], inv: Dict[str, Any], sign: int = 1) -> None:
-    """Accumulate one invoice (flat or itms-nested) into acc."""
-    rcm = _is_rcm(inv)
-    items = inv.get("itms", []) or inv.get("items", [])
-    if items and isinstance(items, list):
-        for itm in items:
-            _accumulate(acc, *_extract_item_amounts(itm), is_rcm_row=rcm, sign=sign)
-    else:
-        _accumulate(acc, *_extract_item_amounts(inv), is_rcm_row=rcm, sign=sign)
-
-
-def _walk_table(acc: Dict[str, float], table: List[Any],
-                group_key: str, item_key: str, sign: int) -> None:
-    """
-    Generic walker for grouped tables (e.g. B2B: list[customer] → invoices).
-    Falls back to treating the entry itself as a flat invoice.
-    """
-    for entry in table:
-        if not isinstance(entry, dict):
-            continue
-        group = entry.get(group_key, []) or entry.get(item_key, [])
-        if group and isinstance(group, list):
-            for inv in group:
-                _process_invoice(acc, inv, sign=sign)
-        else:
-            _process_invoice(acc, entry, sign=sign)
-
-
-def calculate_gross_liability_from_tables(
-    gstr1_tables: Dict[str, Any],
-) -> Dict[str, float]:
-    """
-    Calculate GSTR-1 gross tax liability from the output tables.
-
-    Formula (per GSTN filing logic):
-        Net Liability = (B2B + B2CL + B2CS + EXP) − (CDNR + CDNUR)
-
-    RCM treatment (Table 4B compliance):
-        - RCM taxable value IS included in taxable_value (Table 4A/4B reporting).
-        - RCM tax amounts are NOT included in tax-head liability totals (igst/cgst/sgst/cess)
-          because the liability is discharged by the recipient, not the supplier.
-
-    Returns a dict with keys:
-        taxable_value, igst, cgst, sgst, cess   ← net liability figures
-        rcm_taxable, rcm_igst, rcm_cgst, rcm_sgst, rcm_cess  ← RCM breakdown for transparency
-    """
-    acc: Dict[str, float] = {
-        "taxable_value": 0.0,
-        "igst": 0.0, "cgst": 0.0, "sgst": 0.0, "cess": 0.0,
-        "rcm_taxable": 0.0,
-        "rcm_igst":    0.0, "rcm_cgst": 0.0, "rcm_sgst": 0.0, "rcm_cess": 0.0,
-    }
-
-    # ── Supply tables (sign = +1) ────────────────────────────────────────────
-
-    # B2B: grouped by customer → invoices → itms
-    _walk_table(acc, gstr1_tables.get("b2b", []),
-                group_key="invoices", item_key="inv", sign=+1)
-
-    # B2CL: flat list of invoices (no customer grouping)
-    for inv in gstr1_tables.get("b2cl", []):
-        if isinstance(inv, dict):
-            _process_invoice(acc, inv, sign=+1)
-
-    # B2CS: flat list of rate-POS aggregates
-    for entry in gstr1_tables.get("b2cs", []):
-        if isinstance(entry, dict):
-            _process_invoice(acc, entry, sign=+1)
-
-    # EXP: flat list of export invoices
-    for inv in (gstr1_tables.get("exp", []) or gstr1_tables.get("exports", [])):
-        if isinstance(inv, dict):
-            _process_invoice(acc, inv, sign=+1)
-
-    # ── Deduction tables (sign = −1) ─────────────────────────────────────────
-    # Credit/Debit notes REDUCE supplier liability.
-
-    # CDNR: grouped by customer → notes → itms
-    _walk_table(acc, gstr1_tables.get("cdnr", []),
-                group_key="notes", item_key="note", sign=-1)
-
-    # CDNUR: flat list of unregistered CDN
-    for note in gstr1_tables.get("cdnur", []):
-        if isinstance(note, dict):
-            _process_invoice(acc, note, sign=-1)
-
-    # ── Round to 2 dp to suppress floating-point noise ───────────────────────
-    for key in acc:
-        acc[key] = round(acc[key], 2)
-
-    return acc
-
-
-# Keep the old name as a thin compatibility alias so existing call-sites don't break.
 def calculate_totals_from_tables(gstr1_tables: Dict[str, Any], exclude_rcm: bool = True) -> Dict[str, float]:
-    """Compatibility shim — delegates to calculate_gross_liability_from_tables()."""
-    return calculate_gross_liability_from_tables(gstr1_tables)
+    """Calculate totals by summing values from individual GSTR-1 tables.
+    
+    Args:
+        gstr1_tables: The GSTR-1 tables dictionary
+        exclude_rcm: If True, exclude RCM entries from liability totals (default True)
+    
+    Returns:
+        Dictionary with totals (taxable_value, igst, cgst, sgst, cess)
+    """
+    calculated = {
+        "taxable_value": 0.0,
+        "igst": 0.0,
+        "cgst": 0.0,
+        "sgst": 0.0,
+        "cess": 0.0,
+        "rcm_taxable": 0.0,
+        "rcm_igst": 0.0,
+        "rcm_cgst": 0.0,
+        "rcm_sgst": 0.0,
+        "rcm_cess": 0.0,
+    }
+    
+    # Sum B2B invoices
+    for customer in gstr1_tables.get("b2b", []):
+        for invoice in customer.get("invoices", []):
+            is_rcm = invoice.get("rchrg", "N").upper() == "Y"
+            
+            for item in invoice.get("itms", []):
+                txval = flt(item.get("txval", 0))
+                igst = flt(item.get("iamt", 0))
+                cgst = flt(item.get("camt", 0))
+                sgst = flt(item.get("samt", 0))
+                cess = flt(item.get("csamt", 0))
+                
+                if is_rcm and exclude_rcm:
+                    calculated["rcm_taxable"] += txval
+                    calculated["rcm_igst"] += igst
+                    calculated["rcm_cgst"] += cgst
+                    calculated["rcm_sgst"] += sgst
+                    calculated["rcm_cess"] += cess
+                else:
+                    calculated["taxable_value"] += txval
+                    calculated["igst"] += igst
+                    calculated["cgst"] += cgst
+                    calculated["sgst"] += sgst
+                    calculated["cess"] += cess
+    
+    # Sum B2CL invoices - include CGST/SGST when present
+    for invoice in gstr1_tables.get("b2cl", []):
+        calculated["taxable_value"] += flt(invoice.get("txval", 0))
+        calculated["igst"] += flt(invoice.get("iamt", 0))
+        calculated["cgst"] += flt(invoice.get("camt", 0))
+        calculated["sgst"] += flt(invoice.get("samt", 0))
+        calculated["cess"] += flt(invoice.get("csamt", 0))
+    
+    # Sum B2CS entries - include CGST/SGST when present
+    for entry in gstr1_tables.get("b2cs", []):
+        calculated["taxable_value"] += flt(entry.get("txval", 0))
+        calculated["igst"] += flt(entry.get("iamt", 0))
+        calculated["cgst"] += flt(entry.get("camt", 0))
+        calculated["sgst"] += flt(entry.get("samt", 0))
+        calculated["cess"] += flt(entry.get("csamt", 0))
+    
+    # Sum EXP invoices
+    for invoice in gstr1_tables.get("exp", []):
+        calculated["taxable_value"] += flt(invoice.get("txval", 0))
+        calculated["igst"] += flt(invoice.get("iamt", 0))
+        calculated["cess"] += flt(invoice.get("csamt", 0))
+    
+    # Sum CDNR notes
+    for customer in gstr1_tables.get("cdnr", []):
+        for note in customer.get("notes", []):
+            for item in note.get("itms", []):
+                calculated["taxable_value"] += flt(item.get("txval", 0))
+                calculated["igst"] += flt(item.get("iamt", 0))
+                calculated["cgst"] += flt(item.get("camt", 0))
+                calculated["sgst"] += flt(item.get("samt", 0))
+                calculated["cess"] += flt(item.get("csamt", 0))
+    
+    # Sum CDNUR notes
+    for note in gstr1_tables.get("cdnur", []):
+        calculated["taxable_value"] += flt(note.get("txval", 0))
+        calculated["igst"] += flt(note.get("iamt", 0))
+        calculated["cess"] += flt(note.get("csamt", 0))
+    
+    # Apply final rounding to avoid floating point errors
+    for key in calculated:
+        calculated[key] = round(calculated[key], 2)
+    
+    return calculated
 
 
 def validate_summary_totals(gstr1_tables: Dict[str, Any]) -> ValidationReport:
     """
-    Validate that the pre-computed summary totals match the net liability
-    calculated by calculate_gross_liability_from_tables().
-
-    Uses the single source of truth formula:
-        Net Liability = (B2B + B2CL + B2CS + EXP) − (CDNR + CDNUR)
-    RCM rows are included in taxable_value but excluded from tax-head totals.
+    Validate that summary totals match the sum of individual table values.
+    
+    RCM entries are excluded from liability totals in both summary and table sums.
+    
+    Returns a structured ValidationReport instead of crashing.
     """
     report = ValidationReport()
     summary = gstr1_tables.get("summary", {})
-
-    # ── Single source of truth ──────────────────────────────────────────────
-    calculated = calculate_gross_liability_from_tables(gstr1_tables)
-
+    
+    # Calculate totals from tables - this now excludes RCM by default
+    calculated = calculate_totals_from_tables(gstr1_tables, exclude_rcm=True)
+    
+    # Get summary liability totals (RCM already excluded in generate_gstr1_tables)
     summary_taxable = flt(summary.get("total_taxable_value", 0))
-    summary_igst    = flt(summary.get("total_igst", 0))
-    summary_cgst    = flt(summary.get("total_cgst", 0))
-    summary_sgst    = flt(summary.get("total_sgst", 0))
-    summary_cess    = flt(summary.get("total_cess", 0))
-
+    summary_igst = flt(summary.get("total_igst", 0))
+    summary_cgst = flt(summary.get("total_cgst", 0))
+    summary_sgst = flt(summary.get("total_sgst", 0))
+    summary_cess = flt(summary.get("total_cess", 0))
+    
+    # Tolerance for floating point comparison
     tolerance = 0.05
+    
     has_mismatch = False
-
-    checks = [
-        ("Taxable Value", summary_taxable, calculated["taxable_value"]),
-        ("IGST",         summary_igst,    calculated["igst"]),
-        ("CGST",         summary_cgst,    calculated["cgst"]),
-        ("SGST",         summary_sgst,    calculated["sgst"]),
-        ("CESS",         summary_cess,    calculated["cess"]),
-    ]
-    for label, s_val, c_val in checks:
-        if abs(s_val - c_val) > tolerance:
-            report.add_error(
-                f"{label} Mismatch: Summary={s_val}, "
-                f"Tables [(B2B+B2CL+B2CS+EXP)-(CDNR+CDNUR)]={c_val}"
-            )
-            has_mismatch = True
-
-    # Surface RCM breakdown for audit trail
-    rcm = calculated
-    if rcm["rcm_igst"] > 0 or rcm["rcm_cgst"] > 0 or rcm["rcm_sgst"] > 0:
-        logger.info(
-            f"RCM excluded from tax-head liability: "
-            f"taxable={rcm['rcm_taxable']}, IGST={rcm['rcm_igst']}, "
-            f"CGST={rcm['rcm_cgst']}, SGST={rcm['rcm_sgst']}"
+    
+    # Check taxable value
+    if abs(summary_taxable - calculated["taxable_value"]) > tolerance:
+        report.add_error(
+            f"Taxable Value Mismatch: Summary={summary_taxable}, Tables Sum={calculated['taxable_value']}"
         )
-
+        has_mismatch = True
+    
+    # Check IGST
+    if abs(summary_igst - calculated["igst"]) > tolerance:
+        report.add_error(
+            f"IGST Mismatch: Summary={summary_igst}, Tables Sum={calculated['igst']}"
+        )
+        has_mismatch = True
+    
+    # Check CGST
+    if abs(summary_cgst - calculated["cgst"]) > tolerance:
+        report.add_error(
+            f"CGST Mismatch: Summary={summary_cgst}, Tables Sum={calculated['cgst']}"
+        )
+        has_mismatch = True
+    
+    # Check SGST
+    if abs(summary_sgst - calculated["sgst"]) > tolerance:
+        report.add_error(
+            f"SGST Mismatch: Summary={summary_sgst}, Tables Sum={calculated['sgst']}"
+        )
+        has_mismatch = True
+    
+    # Check CESS
+    if abs(summary_cess - calculated["cess"]) > tolerance:
+        report.add_error(
+            f"CESS Mismatch: Summary={summary_cess}, Tables Sum={calculated['cess']}"
+        )
+        has_mismatch = True
+    
+    # Log RCM breakdown for transparency
+    rcm_igst = flt(summary.get("rcm_igst", 0))
+    rcm_cgst = flt(summary.get("rcm_cgst", 0))
+    rcm_sgst = flt(summary.get("rcm_sgst", 0))
+    
+    if rcm_igst > 0 or rcm_cgst > 0 or rcm_sgst > 0:
+        logger.info(
+            f"RCM entries excluded from liability: IGST={rcm_igst}, CGST={rcm_cgst}, SGST={rcm_sgst}"
+        )
+    
     if not has_mismatch:
         logger.info(
-            f"Summary validation passed [(B2B+B2CL+B2CS+EXP)-(CDNR+CDNUR)]: "
-            f"Taxable={calculated['taxable_value']}, IGST={calculated['igst']}, "
-            f"CGST={calculated['cgst']}, SGST={calculated['sgst']}, CESS={calculated['cess']}"
+            f"Summary validation passed: Taxable={calculated['taxable_value']}, "
+            f"IGST={calculated['igst']}, CGST={calculated['cgst']}, "
+            f"SGST={calculated['sgst']}, CESS={calculated['cess']}"
         )
     else:
         logger.error(f"Summary validation failed: {report.errors}")
-
+    
     return report
-
-
-def cross_validate_hsn_vs_tables(gstr1_tables: Dict[str, Any]) -> List[str]:
-    """
-    Cross-validate that Table 12 (HSN Summary) taxable value and total tax
-    tie out to the net liability calculated by calculate_gross_liability_from_tables().
-
-    Uses the SAME single source of truth as validate_summary_totals() so both
-    functions can never compare against different baseline numbers.
-
-    Tolerance: ₹1.00 (HSN aggregation loses some precision due to rounding
-    per HSN line, so a slightly wider band is acceptable here).
-    """
-    errors = []
-
-    # ── 1. Sum up HSN table (Table 12) ─────────────────────────────────────
-    hsn_list    = gstr1_tables.get("hsn", [])
-    hsn_taxable = 0.0
-    hsn_tax     = 0.0
-    for h in hsn_list:
-        hsn_taxable += flt(h.get("txval", 0))
-        hsn_tax     += (flt(h.get("iamt", 0)) + flt(h.get("camt", 0))
-                        + flt(h.get("samt", 0)) + flt(h.get("csamt", 0)))
-
-    # ── 2. Get transaction-table totals via the single source of truth ──────
-    # Note: HSN covers supply tables only (not CDN), so we compare taxable
-    # against the *gross* supply side.  For tax, HSN must tie to net liability
-    # (supply minus credit/debit notes) per GSTN circular 56/30/2018.
-    liability = calculate_gross_liability_from_tables(gstr1_tables)
-    tx_taxable = liability["taxable_value"]
-    tx_tax     = round(
-        liability["igst"] + liability["cgst"] + liability["sgst"] + liability["cess"], 2
-    )
-
-    # ── 3. Mismatch checks (₹1 tolerance) ──────────────────────────────────
-    tolerance = 1.00
-
-    taxable_diff = abs(hsn_taxable - tx_taxable)
-    if taxable_diff > tolerance:
-        errors.append(
-            f"HSN vs Tables Taxable Value Mismatch: "
-            f"Table 12 (HSN)={round(hsn_taxable, 2)}, "
-            f"Net [(B2B+B2CL+B2CS+EXP)-(CDNR+CDNUR)]={round(tx_taxable, 2)} "
-            f"(Difference: {round(taxable_diff, 2)})"
-        )
-
-    tax_diff = abs(hsn_tax - tx_tax)
-    if tax_diff > tolerance:
-        errors.append(
-            f"HSN vs Tables Total Tax Mismatch: "
-            f"Table 12 (HSN)={round(hsn_tax, 2)}, "
-            f"Net [(B2B+B2CL+B2CS+EXP)-(CDNR+CDNUR)]={round(tx_tax, 2)} "
-            f"(Difference: {round(tax_diff, 2)})"
-        )
-
-    if errors:
-        logger.error(f"HSN cross-validation failed: {errors}")
-    else:
-        logger.info(
-            f"HSN cross-validation passed: "
-            f"HSN Taxable={round(hsn_taxable, 2)} vs Net={round(tx_taxable, 2)}, "
-            f"HSN Tax={round(hsn_tax, 2)} vs Net={round(tx_tax, 2)}"
-        )
-
-    return errors
 
 
 def generate_gstr1_tables(
@@ -1426,21 +1222,14 @@ def generate_gstr1_tables(
     start_time = time.time()
     report = ValidationReport()
 
-    # Safely handle DataFrame passing and rigorously prevent NaN propagation.
-    # ── IMPORTANT: do NOT use blanket fillna("") — it converts Decimal columns to
-    #    str, silently destroying all Decimal precision before the first arithmetic
-    #    operation.  Use _fillna_df_safe() instead, which fills only non-financial
-    #    columns with "" and fills financial columns with Decimal('0.00'). ──
+    # Safely handle DataFrame passing and rigorously prevent NaN propagation
     if hasattr(clean_data, "fillna") and callable(getattr(clean_data, "fillna")):
-        try:
-            clean_data = _fillna_df_safe(clean_data)
-        except Exception:
-            clean_data = clean_data.fillna("")
+        clean_data = clean_data.fillna("")
     if hasattr(clean_data, "to_dict") and callable(getattr(clean_data, "to_dict")):
         try:
-            clean_data = _decimal_safe_records(clean_data)
+            clean_data = clean_data.to_dict('records')
         except Exception as e:
-            logger.warning(f"Failed to convert DataFrame to Decimal-safe records: {e}")
+            logger.warning(f"Failed to convert DataFrame to list of dicts: {e}")
 
     # Use len() to safely check emptiness whether it's a list or DataFrame fallback
     if clean_data is None or len(clean_data) == 0:
@@ -1505,22 +1294,19 @@ def generate_gstr1_tables(
     b2b_invoice_keys: Dict[str, set] = {}  # gstin -> set of invoice_numbers
     exp_invoice_keys: set = set()  # set of invoice_numbers
 
-    from decimal import Decimal as _Decimal
-    _DZ = _Decimal('0.00')
-
-    total_taxable = _DZ
-    total_igst = _DZ
-    total_cgst = _DZ
-    total_sgst = _DZ
-    total_cess = _DZ
+    total_taxable = 0.0
+    total_igst = 0.0
+    total_cgst = 0.0
+    total_sgst = 0.0
+    total_cess = 0.0
     total_invoices = 0
-
+    
     # Track RCM separately - RCM is reported but NOT included in liability
-    total_rcm_taxable = _DZ
-    total_rcm_igst = _DZ
-    total_rcm_cgst = _DZ
-    total_rcm_sgst = _DZ
-    total_rcm_cess = _DZ
+    total_rcm_taxable = 0.0
+    total_rcm_igst = 0.0
+    total_rcm_cgst = 0.0
+    total_rcm_sgst = 0.0
+    total_rcm_cess = 0.0
     
     cdnur_credit_notes = 0
     cdnur_debit_notes = 0
@@ -1570,15 +1356,9 @@ def generate_gstr1_tables(
                 f"Calculated taxable value from inclusive invoice value: {calculated_taxable}"
             )
 
-        # ADD 4: HSN Digit Validation and Cleaning
+        # ADD 4: HSN Digit Validation
         hsn_code = str(row.get("hsn_code", "")).strip()
-        if not hsn_code or hsn_code.lower() in ("nan", "none", "null", "", "999999-missing"):
-            row["hsn_code"] = "999999-MISSING"
-            hsn_code = "999999-MISSING"
-            report.add_warning(
-                f"Missing HSN code at row {row.get('idx', 'unknown')}. Aggregated under '999999-MISSING'."
-            )
-        elif hsn_code and hsn_code != "nan":
+        if hsn_code and hsn_code != "nan":
             # Assume turnover > 5 crore for now (can be made configurable)
             if len(hsn_code) < 6:
                 report.add_warning(
@@ -2006,12 +1786,7 @@ def generate_gstr1_tables(
         report.errors.extend(validation_report.errors)
         report.warnings.extend(validation_report.warnings)
         report.auto_corrections.extend(validation_report.auto_corrections)
-        
-        # Run HSN cross-validation
-        hsn_errors = cross_validate_hsn_vs_tables(result)
-        report.errors.extend(hsn_errors)
-        
-        if not validation_report.is_valid() or hsn_errors:
+        if not validation_report.is_valid():
             report.final_status = "failed"
 
     # Set integrity status
@@ -2041,18 +1816,14 @@ def generate_gstr1_tables(
 def generate_document_summary(clean_data: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Generate document issue summary for GSTR-1."""
     
-    # Safe DataFrame conversion with scrubbing.
-    # Same Decimal-safe treatment as generate_gstr1_tables — avoid blanket fillna("").
+    # Safe DataFrame conversion with scrubbing
     if hasattr(clean_data, "fillna") and callable(getattr(clean_data, "fillna")):
-        try:
-            clean_data = _fillna_df_safe(clean_data)
-        except Exception:
-            clean_data = clean_data.fillna("")
+        clean_data = clean_data.fillna("")
     if hasattr(clean_data, "to_dict") and callable(getattr(clean_data, "to_dict")):
         try:
-            clean_data = _decimal_safe_records(clean_data)
+            clean_data = clean_data.to_dict('records')
         except Exception as e:
-            logger.warning(f"Failed to convert DataFrame to Decimal-safe records: {e}")
+            logger.warning(f"Failed to convert DataFrame to dict records: {e}")
 
     document_counts = {
         "Invoices for outward supply": 0,
