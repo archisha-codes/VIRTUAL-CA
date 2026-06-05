@@ -24,6 +24,7 @@ router = APIRouter(tags=["Workspaces"])
 class WorkspaceCreate(BaseModel):
     name: str
     description: Optional[str] = None
+    pan: Optional[str] = None
 
     @validator("name")
     def name_not_empty(cls, v: str) -> str:
@@ -32,6 +33,17 @@ class WorkspaceCreate(BaseModel):
             raise ValueError("Workspace name cannot be empty")
         if len(v) > 100:
             raise ValueError("Workspace name must be ≤ 100 characters")
+        return v
+
+    @validator("pan")
+    def pan_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip().upper()
+        if not v:
+            return None
+        if not re.match(r"^[A-Z]{5}\d{4}[A-Z]{1}$", v):
+            raise ValueError("Invalid PAN format (must be 10 characters: 5 letters, 4 digits, 1 letter)")
         return v
 
 
@@ -226,6 +238,23 @@ def create_workspace(
         role=UserRole.OWNER,
     )
     db.add(member)
+
+    if body.pan:
+        pan_upper = body.pan.strip().upper()
+        default_gstin = f"27{pan_upper}1Z5"
+        business = Business(
+            id=new_uuid(),
+            workspace_id=workspace.id,
+            legal_name=body.name,
+            trade_name=body.name,
+            gstin=default_gstin,
+            pan=pan_upper,
+            state="Maharashtra",
+            registration_type="regular",
+            status="active"
+        )
+        db.add(business)
+
     db.commit()
     db.refresh(workspace)
 

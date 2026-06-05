@@ -56,11 +56,13 @@ export const useTenantStore = create<TenantState>()(
           set({ businesses, isLoading: false });
           
           const { activeBusinessId } = get();
-          if (activeBusinessId) {
-            const exists = businesses.some((b: Business) => b.id === activeBusinessId);
+          if (businesses.length > 0) {
+            const exists = activeBusinessId ? businesses.some((b: Business) => b.id === activeBusinessId) : false;
             if (!exists) {
-              set({ activeBusinessId: null });
+              set({ activeBusinessId: businesses[0].id });
             }
+          } else {
+            set({ activeBusinessId: null });
           }
         } catch (err: any) {
           set({ error: err.message, isLoading: false });

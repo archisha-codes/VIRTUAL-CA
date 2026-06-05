@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { getAuthHeaders } from '@/lib/api';
+import { useTenantStore } from '@/store/tenantStore';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -99,6 +100,7 @@ const API_BASE = '/api';
 export default function Workspaces() {
   const { toast } = useToast();
   const { user } = useAuth();
+  const { fetchWorkspaces: fetchGlobalWorkspaces, setActiveWorkspace } = useTenantStore();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selectedWorkspace, setSelectedWorkspace] = useState<WorkspaceDetails | null>(null);
   const [loading, setLoading] = useState(true);
@@ -151,7 +153,7 @@ export default function Workspaces() {
     
     try {
       setError(null);
-      const response = await fetch(`${API_BASE}/workspaces?user_id=${user.id}`, {
+      const response = await fetch(`${API_BASE}/workspaces`, {
         headers: await getAuthHeaders()
       });
       
@@ -162,6 +164,9 @@ export default function Workspaces() {
       
       const data = await response.json();
       setWorkspaces(data || []);
+      
+      // Update global tenant store
+      fetchGlobalWorkspaces();
       
       if (data && data.length > 0 && !selectedWorkspace) {
         setSelectedWorkspace(data[0] as unknown as WorkspaceDetails);
@@ -205,11 +210,9 @@ export default function Workspaces() {
 
   const createWorkspace = async () => {
     if (!user) return;
-
-    if (!user) return;
     
     try {
-      const response = await fetch(`${API_BASE}/workspaces?user_id=${user.id}`, {
+      const response = await fetch(`${API_BASE}/workspaces`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -219,13 +222,28 @@ export default function Workspaces() {
       });
       
       if (response.ok) {
+        const data = await response.json();
         toast({
           title: 'Success',
           description: 'Workspace created successfully'
         });
         setShowCreateDialog(false);
-        fetchWorkspaces();
+        
+        // Refresh local and global lists
+        await fetchWorkspaces();
+        
+        // Auto-select newly created workspace locally and globally
+        setSelectedWorkspace(data);
+        setActiveWorkspace(data.id);
+        
         setNewWorkspace({ pan: '', name: '', description: '' });
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        toast({
+          title: 'Error',
+          description: errorData.detail || 'Failed to create workspace',
+          variant: 'destructive'
+        });
       }
     } catch (error) {
       console.error('Failed to create workspace:', error);
@@ -248,7 +266,7 @@ export default function Workspaces() {
     }
     
     try {
-      const response = await fetch(`${API_BASE}/workspaces/${selectedWorkspace.id}/gstins?user_id=${user.id}`, {
+      const response = await fetch(`${API_BASE}/workspaces/${selectedWorkspace.id}/gstins`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -290,7 +308,7 @@ export default function Workspaces() {
     if (!selectedWorkspace || !user) return;
     
     try {
-      const response = await fetch(`${API_BASE}/workspaces/${selectedWorkspace.id}/members?user_id=${user.id}`, {
+      const response = await fetch(`${API_BASE}/workspaces/${selectedWorkspace.id}/members`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -322,7 +340,7 @@ export default function Workspaces() {
     if (!selectedWorkspace || !user) return;
     
     try {
-      const response = await fetch(`${API_BASE}/gstins/${gstinId}?user_id=${user.id}&workspace_id=${selectedWorkspace.id}`, {
+      const response = await fetch(`${API_BASE}/gstins/${gstinId}?workspace_id=${selectedWorkspace.id}`, {
         method: 'DELETE',
         headers: await getAuthHeaders()
       });
@@ -343,7 +361,7 @@ export default function Workspaces() {
     if (!selectedWorkspace || !user) return;
     
     try {
-      const response = await fetch(`${API_BASE}/workspaces/${selectedWorkspace.id}/members/${userId}?user_id=${user.id}`, {
+      const response = await fetch(`${API_BASE}/workspaces/${selectedWorkspace.id}/members/${userId}`, {
         method: 'DELETE',
         headers: await getAuthHeaders()
       });
