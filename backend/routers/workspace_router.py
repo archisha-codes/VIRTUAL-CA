@@ -122,6 +122,7 @@ class BusinessResponse(BaseModel):
     state: Optional[str] = None
     registration_type: str = "regular"
     status: str = "active"
+    is_default: bool = False
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -208,6 +209,7 @@ def _build_business_response(b: Business) -> BusinessResponse:
         state=b.state or get_state_from_gstin(b.gstin),
         registration_type=b.registration_type,
         status=b.status,
+        is_default=b.is_default,
         created_at=b.created_at.isoformat() if b.created_at else None,
         updated_at=b.updated_at.isoformat() if b.updated_at else None,
     )
@@ -251,7 +253,8 @@ def create_workspace(
             pan=pan_upper,
             state="Maharashtra",
             registration_type="regular",
-            status="active"
+            status="active",
+            is_default=True
         )
         db.add(business)
 
@@ -579,6 +582,10 @@ def create_business(
     if existing:
         raise HTTPException(status_code=409, detail="This GSTIN is already registered in this workspace")
 
+    # Check if this is the first GSTIN in the workspace
+    count = db.query(Business).filter(Business.workspace_id == workspace_id).count()
+    is_default_val = (count == 0)
+
     business = Business(
         id=new_uuid(),
         workspace_id=workspace_id,
@@ -589,6 +596,7 @@ def create_business(
         state=body.state,
         registration_type=body.registration_type,
         status="active",
+        is_default=is_default_val,
     )
     db.add(business)
     db.commit()
@@ -672,8 +680,37 @@ def delete_business(
     if not membership:
         raise HTTPException(status_code=403, detail="Only the workspace owner can delete a business")
 
+    if business.is_default:
+        raise HTTPException(status_code=400, detail="Cannot delete the default GSTIN. Please make another GSTIN default first.")
+
     db.delete(business)
     db.commit()
+
+
+@router.post("/api/workspaces/{workspace_id}/gstins/{business_id}/default", response_model=BusinessResponse)
+def set_default_business(
+    workspace_id: str,
+    business_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _: WorkspaceMember = Depends(verify_workspace_access),
+):
+    """Set a business (GSTIN) as default in the workspace. Unsets all others."""
+    business = db.query(Business).filter(
+        Business.id == business_id,
+        Business.workspace_id == workspace_id
+    ).first()
+    if not business:
+        raise HTTPException(status_code=404, detail="GSTIN not found in this workspace")
+
+    # Set all other businesses in this workspace to is_default = False
+    db.query(Business).filter(Business.workspace_id == workspace_id).update({"is_default": False})
+
+    # Set the target business to is_default = True
+    business.is_default = True
+    db.commit()
+    db.refresh(business)
+    return _build_business_response(business)
 
 
 @router.get("/api/workspaces/{workspace_id}/consolidated/summary/{period}", response_model=ConsolidatedMetrics)

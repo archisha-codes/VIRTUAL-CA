@@ -48,7 +48,7 @@ def list_businesses_with_gstins(
             "status": "active",
             "registration_type": "regular",
             "category": "b2b",
-            "is_default": False,
+            "is_default": b.is_default,
             "lastVerified": b.updated_at.isoformat() if b.updated_at else None
         })
     

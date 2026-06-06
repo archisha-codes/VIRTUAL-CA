@@ -114,6 +114,7 @@ class Business(Base, TimestampMixin):
     state: Mapped[Optional[str]] = mapped_column(String(50))
     registration_type: Mapped[str] = mapped_column(String(20), default="regular")
     status: Mapped[str] = mapped_column(String(20), default="active")
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Relationships
     workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="businesses")

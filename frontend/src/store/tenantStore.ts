@@ -30,21 +30,25 @@ export const useTenantStore = create<TenantState>()(
       error: null,
 
       fetchWorkspaces: async () => {
+        console.info('[TenantStore] Fetching workspaces...');
         set({ isLoading: true, error: null });
         try {
           const workspaces = await fetchWorkspaces();
+          console.debug('[TenantStore] Workspaces loaded:', workspaces);
           set({ workspaces, isLoading: false });
           
           const { activeWorkspaceId } = get();
           if (activeWorkspaceId) {
             const exists = workspaces.some((w: Workspace) => w.id === activeWorkspaceId);
             if (!exists) {
+              console.info('[TenantStore] Previously active workspace no longer exists, resetting.');
               set({ activeWorkspaceId: null, activeBusinessId: null, businesses: [] });
             } else {
               await get().fetchBusinesses(activeWorkspaceId);
             }
           }
         } catch (err: any) {
+          console.error('[TenantStore] Failed to fetch workspaces:', err);
           set({ error: err.message, isLoading: false });
         }
       },
@@ -65,6 +69,7 @@ export const useTenantStore = create<TenantState>()(
             set({ activeBusinessId: null });
           }
         } catch (err: any) {
+          console.error('[TenantStore] Failed to fetch businesses:', err);
           set({ error: err.message, isLoading: false });
         }
       },
@@ -73,6 +78,9 @@ export const useTenantStore = create<TenantState>()(
         const currentId = get().activeWorkspaceId;
         if (id === currentId) return;
 
+        console.info('[TenantStore] Active workspace set to:', id);
+        // Calling set() here triggers a Zustand state update that all subscribers immediately react to.
+        // The persist middleware will also synchronize this to localStorage automatically.
         set({ activeWorkspaceId: id, activeBusinessId: null, businesses: [] });
         if (id) {
           get().fetchBusinesses(id);
