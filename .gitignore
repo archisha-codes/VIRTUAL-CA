@@ -1,0 +1,25 @@
+.DS_Store
+*.pyc
+*.egg-info
+*.swp
+tags
+.vscode/
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+.env
+venv/
+*.log
+
+# Backend
+backend/__pycache__/
+backend/logs/
+backend/uploads/
+backend/india_compliance/docs/current
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.next/
+frontend/.DS_Store

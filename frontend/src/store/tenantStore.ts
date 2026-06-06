@@ -1,0 +1,124 @@
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { Workspace, Business } from '@/types/tenant';
+import { fetchWorkspaces, fetchBusinesses as apiFetchBusinesses } from '@/lib/api';
+
+interface TenantState {
+  workspaces: Workspace[];
+  businesses: Business[];
+  activeWorkspaceId: string | null;
+  activeBusinessId: string | null;
+  isLoading: boolean;
+  error: string | null;
+  
+  // Actions
+  fetchWorkspaces: () => Promise<void>;
+  fetchBusinesses: (workspaceId: string) => Promise<void>;
+  setActiveWorkspace: (id: string | null) => void;
+  setActiveBusiness: (id: string | null) => void;
+  reset: () => void;
+}
+
+export const useTenantStore = create<TenantState>()(
+  persist(
+    (set, get) => ({
+      workspaces: [],
+      businesses: [],
+      activeWorkspaceId: null,
+      activeBusinessId: null,
+      isLoading: false,
+      error: null,
+
+      fetchWorkspaces: async () => {
+        console.info('[TenantStore] Fetching workspaces...');
+        set({ isLoading: true, error: null });
+        try {
+          const workspaces = await fetchWorkspaces();
+          console.debug('[TenantStore] Workspaces loaded:', workspaces);
+          set({ workspaces, isLoading: false });
+          
+          const { activeWorkspaceId } = get();
+          if (activeWorkspaceId) {
+            const exists = workspaces.some((w: Workspace) => w.id === activeWorkspaceId);
+            if (!exists) {
+              console.info('[TenantStore] Previously active workspace no longer exists, resetting.');
+              set({ activeWorkspaceId: null, activeBusinessId: null, businesses: [] });
+            } else {
+              await get().fetchBusinesses(activeWorkspaceId);
+            }
+          }
+        } catch (err: any) {
+          console.error('[TenantStore] Failed to fetch workspaces:', err);
+          set({ error: err.message, isLoading: false });
+        }
+      },
+
+      fetchBusinesses: async (workspaceId: string) => {
+        set({ isLoading: true, error: null });
+        try {
+          const businesses = await apiFetchBusinesses(workspaceId);
+          set({ businesses, isLoading: false });
+          
+          const { activeBusinessId } = get();
+          if (businesses.length > 0) {
+            const exists = activeBusinessId ? businesses.some((b: Business) => b.id === activeBusinessId) : false;
+            if (!exists) {
+              set({ activeBusinessId: businesses[0].id });
+            }
+          } else {
+            set({ activeBusinessId: null });
+          }
+        } catch (err: any) {
+          console.error('[TenantStore] Failed to fetch businesses:', err);
+          set({ error: err.message, isLoading: false });
+        }
+      },
+
+      setActiveWorkspace: (id: string | null) => {
+        const currentId = get().activeWorkspaceId;
+        if (id === currentId) return;
+
+        console.info('[TenantStore] Active workspace set to:', id);
+        // Calling set() here triggers a Zustand state update that all subscribers immediately react to.
+        // The persist middleware will also synchronize this to localStorage automatically.
+        set({ activeWorkspaceId: id, activeBusinessId: null, businesses: [] });
+        if (id) {
+          get().fetchBusinesses(id);
+        }
+      },
+
+      setActiveBusiness: (id: string | null) => {
+        set({ activeBusinessId: id });
+      },
+
+      reset: () => {
+        set({
+          workspaces: [],
+          businesses: [],
+          activeWorkspaceId: null,
+          activeBusinessId: null,
+          isLoading: false,
+          error: null,
+        });
+      },
+    }),
+    {
+      name: 'tenant-storage',
+      partialize: (state) => ({ 
+        activeWorkspaceId: state.activeWorkspaceId, 
+        activeBusinessId: state.activeBusinessId 
+      }),
+    }
+  )
+);
+
+// Helper selectors
+export const useActiveWorkspace = () => {
+  const { workspaces, activeWorkspaceId } = useTenantStore();
+  return workspaces.find((w) => w.id === activeWorkspaceId) || null;
+};
+
+export const useActiveBusiness = () => {
+  const { businesses, activeBusinessId } = useTenantStore();
+  return businesses.find((b) => b.id === activeBusinessId) || null;
+};
