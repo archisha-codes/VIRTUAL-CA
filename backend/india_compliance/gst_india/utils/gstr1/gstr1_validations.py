@@ -293,7 +293,7 @@ def validate_gstin(gstin: str, field_name: str = "gstin") -> Optional[GSTR1Valid
     if state_code not in VALID_STATE_CODES:
         return GSTR1ValidationError(
             row=0, field=field_name,
-            error=f"Invalid GSTIN: unrecognised state code '{state_code}'",
+            error=f"Invalid GSTIN: invalid state code '{state_code}'",
             value=gstin
         )
 
@@ -381,21 +381,25 @@ def validate_invoice_date(
             value=invoice_date
         )
     
-    # Try to parse the date
-    date_formats = [
-        "%d/%m/%Y",   # DD/MM/YYYY
-        "%d-%m-%Y",   # DD-MM-YYYY
-        "%Y-%m-%d",   # YYYY-MM-DD
-        "%d/%m/%y",   # DD/MM/YY
-    ]
-    
     invoice_datetime = None
-    for fmt in date_formats:
-        try:
-            invoice_datetime = datetime.strptime(str(invoice_date), fmt)
-            break
-        except ValueError:
-            continue
+    if isinstance(invoice_date, datetime):
+        invoice_datetime = invoice_date
+    elif isinstance(invoice_date, date_type):
+        invoice_datetime = datetime(invoice_date.year, invoice_date.month, invoice_date.day)
+    else:
+        # Try to parse the date string
+        date_formats = [
+            "%d/%m/%Y",   # DD/MM/YYYY
+            "%d-%m-%Y",   # DD-MM-YYYY
+            "%d/%m/%y",   # DD/MM/YY
+        ]
+        
+        for fmt in date_formats:
+            try:
+                invoice_datetime = datetime.strptime(str(invoice_date), fmt)
+                break
+            except ValueError:
+                continue
     
     if invoice_datetime is None:
         return GSTR1ValidationError(
@@ -435,7 +439,7 @@ def validate_invoice_date(
         return_year if return_month < 12 else return_year + 1,
         return_month + 1 if return_month < 12 else 1,
         1
-    ) - datetime.timedelta(days=1)
+    ) - timedelta(days=1)
     
     # Allow up to 7 days into the next month for previous month's invoices
     grace_period_end = datetime(
@@ -1053,7 +1057,7 @@ def validate_b2b_row(row: Dict[str, Any], row_number: int, company_gstin: str = 
     return errors
 
 
-def validate_b2cl_row(row: Dict[str, Any], row_number: int) -> List[Dict[str, Any]]:
+def validate_b2cl_row(row: Dict[str, Any], row_number: int, company_gstin: str = "") -> List[Dict[str, Any]]:
     """
     Validate a B2CL (B2C Large) invoice row.
     
@@ -1141,7 +1145,7 @@ def validate_b2cl_row(row: Dict[str, Any], row_number: int) -> List[Dict[str, An
     return errors
 
 
-def validate_b2cs_row(row: Dict[str, Any], row_number: int) -> List[Dict[str, Any]]:
+def validate_b2cs_row(row: Dict[str, Any], row_number: int, company_gstin: str = "") -> List[Dict[str, Any]]:
     """
     Validate a B2CS (B2C Small) invoice row.
     
@@ -1224,7 +1228,7 @@ def validate_b2cs_row(row: Dict[str, Any], row_number: int) -> List[Dict[str, An
     return errors
 
 
-def validate_export_row(row: Dict[str, Any], row_number: int) -> List[Dict[str, Any]]:
+def validate_export_row(row: Dict[str, Any], row_number: int, company_gstin: str = "") -> List[Dict[str, Any]]:
     """
     Validate an Export invoice row.
     
@@ -1294,7 +1298,7 @@ def validate_export_row(row: Dict[str, Any], row_number: int) -> List[Dict[str, 
     return errors
 
 
-def validate_cdnr_row(row: Dict[str, Any], row_number: int) -> List[Dict[str, Any]]:
+def validate_cdnr_row(row: Dict[str, Any], row_number: int, company_gstin: str = "") -> List[Dict[str, Any]]:
     """
     Validate a CDNR (Credit/Debit Note - Registered) row.
     
@@ -1359,7 +1363,7 @@ def validate_cdnr_row(row: Dict[str, Any], row_number: int) -> List[Dict[str, An
     return errors
 
 
-def validate_cdnur_row(row: Dict[str, Any], row_number: int) -> List[Dict[str, Any]]:
+def validate_cdnur_row(row: Dict[str, Any], row_number: int, company_gstin: str = "") -> List[Dict[str, Any]]:
     """
     Validate a CDNUR (Credit/Debit Note - Unregistered) row.
     

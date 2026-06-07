@@ -101,35 +101,51 @@ export default function GSTR1UploadToGSTNPage({ gstin, returnPeriod }: Props) {
         };
       }
 
-      const calculateTotal = (arr: any[], key: string) => arr?.reduce((acc: number, val: any) => {
-        const num = Number(val[key] || val.txval || val.taxable_value || 0);
-        return acc + (Number.isFinite(num) ? num : 0);
-      }, 0) || 0;
+      // Helper: extract tax/value from nested GSTN structures (B2B: invoices[].itms[], CDNR: notes[].itms[], flat: B2CS/B2CL/EXP)
+      const extractFromStructure = (arr: any[], fields: string[]): number => {
+        const getFieldVal = (obj: any): number => fields.reduce((s, f) => s + Number(obj[f] || 0), 0);
+        return arr?.reduce((acc: number, val: any) => {
+          // B2B: {ctin, invoices: [{inum, itms: [{txval, iamt, camt, samt}]}]}
+          if (Array.isArray(val.invoices)) {
+            return acc + val.invoices.reduce((s: number, inv: any) => {
+              if (Array.isArray(inv.itms)) return s + inv.itms.reduce((t: number, itm: any) => t + getFieldVal(itm), 0);
+              return s + getFieldVal(inv);
+            }, 0);
+          }
+          // CDNR: {ctin, notes: [{nt_num, itms: [{txval, iamt, camt, samt}]}]}
+          if (Array.isArray(val.notes)) {
+            return acc + val.notes.reduce((s: number, note: any) => {
+              if (Array.isArray(note.itms)) return s + note.itms.reduce((t: number, itm: any) => t + getFieldVal(itm), 0);
+              return s + getFieldVal(note);
+            }, 0);
+          }
+          // Flat with itms (some schemas)
+          if (Array.isArray(val.itms)) return acc + val.itms.reduce((s: number, itm: any) => s + getFieldVal(itm), 0);
+          // Old items[] format
+          if (Array.isArray(val.items)) return acc + val.items.reduce((s: number, itm: any) => s + getFieldVal(itm), 0);
+          // Flat: B2CS, B2CL, EXP
+          return acc + getFieldVal(val);
+        }, 0) || 0;
+      };
 
-      docs = (gstr1Data.b2b?.length || 0) + (gstr1Data.b2cl?.length || 0) + (gstr1Data.b2cs?.length || 0) + (gstr1Data.exp?.length || 0) + (gstr1Data.cdnr?.length || 0);
+      const calculateTotal = (arr: any[]): number => extractFromStructure(arr || [], ['txval', 'taxable_value']);
 
-      taxable = calculateTotal(gstr1Data.b2b, 'txval') + calculateTotal(gstr1Data.b2cl, 'txval') + calculateTotal(gstr1Data.b2cs, 'txval') + calculateTotal(gstr1Data.exp, 'txval') + calculateTotal(gstr1Data.cdnr, 'txval');
+      const b2bDocsCount = gstr1Data.b2b?.reduce((acc: number, val: any) => acc + (val.invoices?.length || 0), 0) || 0;
+      const cdnrDocsCount = gstr1Data.cdnr?.reduce((acc: number, val: any) => acc + (val.notes?.length || 0), 0) || 0;
 
-      const getTaxDetails = (arr: any[], type: 'igst' | 'cgst' | 'sgst' | 'cess') => arr?.reduce((acc: number, val: any) => {
+      docs = b2bDocsCount + (gstr1Data.b2cl?.length || 0) + (gstr1Data.b2cs?.length || 0) + (gstr1Data.exp?.length || 0) + cdnrDocsCount;
+
+      taxable = calculateTotal(gstr1Data.b2b) + calculateTotal(gstr1Data.b2cl) + calculateTotal(gstr1Data.b2cs) + calculateTotal(gstr1Data.exp) + calculateTotal(gstr1Data.cdnr);
+
+      const getTaxDetails = (arr: any[], type: 'igst' | 'cgst' | 'sgst' | 'cess') => {
         const fieldMap: Record<string, string[]> = {
           'igst': ['iamt', 'igst', 'integrated_tax', 'igst_amount'],
           'cgst': ['camt', 'cgst', 'central_tax', 'cgst_amount'],
           'sgst': ['samt', 'sgst', 'state_tax', 'sgst_amount'],
           'cess': ['csamt', 'cess', 'compensation_tax', 'cess_amount']
         };
-        const fields = fieldMap[type];
-        
-        // Handle nested items if structure matches invoice items
-        if (Array.isArray(val.items)) {
-          return acc + val.items.reduce((sum: number, item: any) => {
-            const itemTax = fields.reduce((s, f) => s + Number(item[f] || 0), 0);
-            return sum + itemTax;
-          }, 0);
-        }
-
-        const val_tax = fields.reduce((sum, f) => sum + Number(val[f] || 0), 0);
-        return acc + val_tax;
-      }, 0) || 0;
+        return extractFromStructure(arr || [], fieldMap[type]);
+      };
 
       const igst = getTaxDetails(gstr1Data.b2b, 'igst') + getTaxDetails(gstr1Data.b2cl, 'igst') + getTaxDetails(gstr1Data.exp, 'igst') + getTaxDetails(gstr1Data.cdnr, 'igst');
       const cgst = getTaxDetails(gstr1Data.b2b, 'cgst') + getTaxDetails(gstr1Data.b2cs, 'cgst') + getTaxDetails(gstr1Data.cdnr, 'cgst');
@@ -318,8 +334,9 @@ export default function GSTR1UploadToGSTNPage({ gstin, returnPeriod }: Props) {
               size="icon"
               className="h-9 w-9 border-slate-200 bg-white shadow-sm text-blue-600 hover:bg-slate-50"
               onClick={() => { loadData(); toast({ title: 'Refreshing', description: 'Reloading data...' }); }}
+            disabled={isLoading}
             >
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -527,21 +544,21 @@ export default function GSTR1UploadToGSTNPage({ gstin, returnPeriod }: Props) {
                         <td className="py-2 px-4 text-center border-r border-slate-100 text-slate-600">{bizUploadedStatus ? bizTotals.docs : '-'}</td>
                         <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(bizUploadedStatus ? bizTotals.taxable : 0)}</td>
                         <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(bizUploadedStatus ? bizTotals.tax : 0)}</td>
-                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(0)}</td>
-                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(0)}</td>
-                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(0)}</td>
-                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(0)}</td>
+                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(bizUploadedStatus ? bizTotals.igst : 0)}</td>
+                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(bizUploadedStatus ? bizTotals.cgst : 0)}</td>
+                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(bizUploadedStatus ? bizTotals.sgst : 0)}</td>
+                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(bizUploadedStatus ? bizTotals.cess : 0)}</td>
                       </tr>
-                      {/* Row 3 */}
+                      {/* Row 3 - Difference: Your Data minus Uploaded to GSTN */}
                       <tr className="border-b border-slate-200 bg-white group hover:bg-slate-50/30">
                         <td className="py-2 px-4 text-slate-600 font-medium border-r border-slate-100 whitespace-nowrap">Difference</td>
                         <td className="py-2 px-4 text-center border-r border-slate-100 text-slate-600">{bizUploadedStatus ? '-' : (bizTotals.docs || '-')}</td>
                         <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(bizUploadedStatus ? 0 : bizTotals.taxable)}</td>
                         <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(bizUploadedStatus ? 0 : bizTotals.tax)}</td>
-                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(0)}</td>
-                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(0)}</td>
-                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(0)}</td>
-                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(0)}</td>
+                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(bizUploadedStatus ? 0 : bizTotals.igst)}</td>
+                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(bizUploadedStatus ? 0 : bizTotals.cgst)}</td>
+                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(bizUploadedStatus ? 0 : bizTotals.sgst)}</td>
+                        <td className="py-2 px-4 text-right border-r border-slate-100 text-slate-600">{formatCurrency(bizUploadedStatus ? 0 : bizTotals.cess)}</td>
                       </tr>
                     </React.Fragment>
                   );

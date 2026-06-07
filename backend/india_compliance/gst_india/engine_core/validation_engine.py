@@ -446,8 +446,10 @@ def validate_date(
         )
     
     # Try to parse date
-    if isinstance(date_val, (datetime, date)):
-        parsed_date = date_val if isinstance(date_val, date) else date_val.date()
+    if isinstance(date_val, datetime):
+        parsed_date = date_val.date()
+    elif isinstance(date_val, date):
+        parsed_date = date_val
     else:
         parsed_date = None
         for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d %b %Y", "%d %B %Y"]:
@@ -731,8 +733,8 @@ def validate_hsn_code(
 ) -> Optional[ValidationResult]:
     """Validate HSN/SAC code format and consistency."""
     hsn = row.get("hsn_code")
-    uqc = row.get("uqc")
-    description = row.get("item_description")
+    uqc = row.get("uqc", row.get("uom"))
+    description = row.get("item_description", row.get("description"))
     
     if pd.isna(hsn) or not str(hsn).strip():
         return None  # HSN is optional here, summary checks will enforce if mandatory
@@ -870,8 +872,10 @@ def validate_invoice_date_vs_return_period(
     
     # Parse invoice date
     parsed_date = None
-    if isinstance(invoice_date, (datetime, date)):
-        parsed_date = invoice_date if isinstance(invoice_date, date) else invoice_date.date()
+    if isinstance(invoice_date, datetime):
+        parsed_date = invoice_date.date()
+    elif isinstance(invoice_date, date):
+        parsed_date = invoice_date
     else:
         for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d %b %Y", "%d %B %Y"]:
             try:
@@ -1049,6 +1053,184 @@ def validate_note_timing(
             error_code=rule.error_code,
             row_index=kwargs.get("row_index")
         )
+    return None
+
+
+def validate_recipient_vs_supplier_gstin(
+    row: pd.Series,
+    rule: ValidationRule,
+    **kwargs
+) -> Optional[ValidationResult]:
+    """Check that recipient GSTIN is not equal to supplier GSTIN."""
+    recipient_gstin = str(row.get("gstin", "") or "").strip().upper()
+    supplier_gstin = str(kwargs.get("supplier_gstin", "") or "").strip().upper()
+    
+    if not recipient_gstin or not supplier_gstin:
+        return None
+        
+    if recipient_gstin == supplier_gstin:
+        return ValidationResult(
+            rule_name=rule.name,
+            category=rule.category,
+            severity=rule.severity,
+            message="Recipient GSTIN cannot be the same as supplier GSTIN",
+            field="gstin",
+            value=recipient_gstin,
+            suggestion="Verify and enter the correct recipient's GSTIN",
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+    return None
+
+
+def validate_recipient_name(
+    row: pd.Series,
+    rule: ValidationRule,
+    **kwargs
+) -> Optional[ValidationResult]:
+    """Validate/warn if recipient trade name is missing or generic."""
+    cust_name = str(row.get("customer_name", "") or "").strip()
+    if not cust_name:
+        return ValidationResult(
+            rule_name=rule.name,
+            category=rule.category,
+            severity=ValidationSeverity.WARNING,
+            message="Recipient Trade/Legal Name is missing",
+            field="customer_name",
+            value=cust_name,
+            suggestion="Enter the registered Trade Name or Legal Name of the recipient",
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+    if "placeholder" in cust_name.lower() or "test" in cust_name.lower():
+         return ValidationResult(
+            rule_name="recipient_name_generic",
+            category=rule.category,
+            severity=ValidationSeverity.WARNING,
+            message="Recipient name appears to be generic or placeholder",
+            field="customer_name",
+            value=cust_name,
+            suggestion="Ensure recipient name matches the trade/legal name registered on GST Portal",
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+    return None
+
+
+def validate_invoice_number_portal_chars(
+    row: pd.Series,
+    rule: ValidationRule,
+    **kwargs
+) -> Optional[ValidationResult]:
+    """Validate that invoice number contains only alphanumeric and /, - characters."""
+    invoice_no = row.get("invoice_number")
+    if pd.isna(invoice_no) or not str(invoice_no).strip():
+        return None
+    invoice_str = str(invoice_no).strip()
+    
+    invalid_chars = re.findall(r'[^A-Za-z0-9/-]', invoice_str)
+    if invalid_chars:
+        unique_invalid = sorted(list(set(invalid_chars)))
+        return ValidationResult(
+            rule_name=rule.name,
+            category=rule.category,
+            severity=rule.severity,
+            message=f"Invoice number contains portal-invalid characters: {unique_invalid}",
+            field="invoice_number",
+            value=invoice_no,
+            suggestion="Invoice number on GST portal can only contain alphanumeric characters, slash (/), and hyphen (-)",
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+    return None
+
+
+def validate_invoice_date_portal_range(
+    row: pd.Series,
+    rule: ValidationRule,
+    **kwargs
+) -> Optional[ValidationResult]:
+    """Validate that invoice date is on or after GST Inception (01/07/2017)."""
+    invoice_date = row.get("invoice_date")
+    if not invoice_date or pd.isna(invoice_date):
+        return None
+        
+    parsed_date = None
+    if isinstance(invoice_date, datetime):
+        parsed_date = invoice_date.date()
+    elif isinstance(invoice_date, date):
+        parsed_date = invoice_date
+    else:
+        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d %b %Y", "%d %B %Y"]:
+            try:
+                parsed_date = datetime.strptime(str(invoice_date), fmt).date()
+                break
+            except ValueError:
+                continue
+                
+    if parsed_date is None:
+        return None
+        
+    gst_inception = date(2017, 7, 1)
+    if parsed_date < gst_inception:
+        return ValidationResult(
+            rule_name=rule.name,
+            category=rule.category,
+            severity=rule.severity,
+            message=f"Invoice date {parsed_date} cannot be before GST inception date (01/07/2017)",
+            field="invoice_date",
+            value=invoice_date,
+            suggestion="Correct the invoice date to be on or after 01/07/2017",
+            error_code=rule.error_code,
+            row_index=kwargs.get("row_index")
+        )
+    return None
+
+
+def validate_pos_vs_recipient_gstin(
+    row: pd.Series,
+    rule: ValidationRule,
+    **kwargs
+) -> Optional[ValidationResult]:
+    """Validate that Place of Supply matches the recipient's GSTIN state code."""
+    gstin = str(row.get("gstin", "") or "").strip().upper()
+    pos = str(row.get("place_of_supply", "") or "").strip()
+    gst_category = str(row.get("gst_category", "") or "").strip().upper()
+    customer_type = str(row.get("customer_type", "") or "").strip().upper()
+    
+    if not gstin or len(gstin) < 2 or not pos:
+        return None
+        
+    if gst_category == "SEZ" or customer_type == "SEZ" or gst_category == "OVERSEAS":
+        return None
+        
+    recipient_state = gstin[:2]
+    
+    pos_state = ""
+    if "-" in pos:
+        pos_state = pos.split("-")[0].strip()
+    elif pos.isdigit():
+        pos_state = pos
+    else:
+        for code, name in INDIAN_STATE_CODES.items():
+            if name.lower() in pos.lower() or pos.lower() in name.lower():
+                pos_state = code
+                break
+                
+    if recipient_state and pos_state and recipient_state != pos_state:
+        if recipient_state in INDIAN_STATE_CODES and pos_state in INDIAN_STATE_CODES:
+            return ValidationResult(
+                rule_name=rule.name,
+                category=rule.category,
+                severity=rule.severity,
+                message=f"Place of Supply state '{pos_state}' mismatch with recipient GSTIN state code '{recipient_state}'",
+                field="place_of_supply",
+                value=pos,
+                expected=recipient_state,
+                suggestion=f"Place of Supply must match recipient's registered state ({recipient_state}-{INDIAN_STATE_CODES.get(recipient_state, '')})",
+                error_code=rule.error_code,
+                row_index=kwargs.get("row_index")
+            )
     return None
 
 
@@ -1312,6 +1494,57 @@ class ValidationEngine:
             message="Document series consistency check",
             error_code="VAL_DOC_SERIES"
         ))
+
+        # GSTR1 Portal Validations (B2B recipient vs supplier, characters, date inception, POS vs Recipient GSTIN)
+        self.add_rule(ValidationRule(
+            name="recipient_gstin_not_equal_supplier",
+            category=ValidationCategory.GSTIN,
+            severity=ValidationSeverity.ERROR,
+            check_func=validate_recipient_vs_supplier_gstin,
+            message="Recipient GSTIN cannot be same as supplier GSTIN",
+            suggestion="Ensure recipient GSTIN is different from supplier's own GSTIN",
+            error_code="VAL_GSTIN_NOT_EQUAL_SUPPLIER"
+        ))
+
+        self.add_rule(ValidationRule(
+            name="recipient_name",
+            category=ValidationCategory.FORMAT,
+            severity=ValidationSeverity.WARNING,
+            check_func=validate_recipient_name,
+            message="Recipient trade/legal name check",
+            suggestion="Trade name should match trade name registered on GST Portal",
+            error_code="VAL_RECIPIENT_NAME"
+        ))
+
+        self.add_rule(ValidationRule(
+            name="invoice_number_portal_chars",
+            category=ValidationCategory.INVOICE,
+            severity=ValidationSeverity.WARNING,
+            check_func=validate_invoice_number_portal_chars,
+            message="Invoice number can only contain alphanumeric and / or - characters",
+            suggestion="Remove special characters from invoice number for portal compatibility",
+            error_code="VAL_INV_PORTAL_CHARS"
+        ))
+
+        self.add_rule(ValidationRule(
+            name="invoice_date_portal_range",
+            category=ValidationCategory.DATE,
+            severity=ValidationSeverity.ERROR,
+            check_func=validate_invoice_date_portal_range,
+            message="Invoice date cannot be before GST inception (01/07/2017)",
+            suggestion="Set correct invoice date on or after 01/07/2017",
+            error_code="VAL_DATE_PORTAL_RANGE"
+        ))
+
+        self.add_rule(ValidationRule(
+            name="pos_vs_recipient_gstin",
+            category=ValidationCategory.CONSISTENCY,
+            severity=ValidationSeverity.WARNING,
+            check_func=validate_pos_vs_recipient_gstin,
+            message="Place of Supply state must match recipient GSTIN's state code",
+            suggestion="Set POS state to match the first two digits of the recipient GSTIN",
+            error_code="VAL_POS_VS_RECIPIENT_GSTIN"
+        ))
     
     def add_rule(self, rule: ValidationRule):
         """Add a custom validation rule."""
@@ -1380,11 +1613,18 @@ class ValidationEngine:
             List of ValidationResult objects
         """
         results = []
+        category_fields = {
+            ValidationCategory.INVOICE: "invoice_number",
+            ValidationCategory.DATE: "invoice_date",
+            ValidationCategory.GSTIN: "gstin",
+            ValidationCategory.AMOUNT: "invoice_value",
+        }
         
         for rule in self.rules:
+            f_name = category_fields.get(rule.category, rule.category.value)
             result = rule.check(
                 row,
-                field_name=rule.category.value,
+                field_name=f_name,
                 row_index=row_index,
                 filing_period_start=self.filing_period_start,
                 filing_period_end=self.filing_period_end,

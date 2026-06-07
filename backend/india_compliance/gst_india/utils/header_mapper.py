@@ -526,6 +526,9 @@ def clean_numeric_value(value: Any) -> Optional[float]:
         # Handle empty strings
         if not cleaned:
             return None
+            
+        # Strip common currency prefixes at start to avoid duplicate dots (e.g. "Rs.")
+        cleaned = re.sub(r'^(Rs\.|RS|Rs|INR|\$|₹)\s*', '', cleaned, flags=re.IGNORECASE)
         
         # Check for negative in parentheses
         is_negative = False
@@ -846,9 +849,8 @@ def validate_gst_tax(
     
     total_actual_tax = actual_igst + actual_cgst + actual_sgst
     
-    # Calculate difference
-    difference = round(total_actual_tax - expected_tax, 2)
-    abs_difference = abs(difference)
+    # Calculate difference (always return positive/absolute difference for reporting)
+    difference = round(abs(total_actual_tax - expected_tax), 2)
     
     # Determine expected tax distribution
     if is_inter_state_supply:
@@ -862,10 +864,25 @@ def validate_gst_tax(
         expected_cgst = round(expected_tax / 2, 2)
         expected_sgst = round(expected_tax / 2, 2)
     
-    # STRICT MODE: Only auto-correct for small differences
-    if abs_difference <= GST_TOLERANCE:
+    # Define thresholds
+    OK_THRESHOLD = 0.25
+    AUTOCORRECT_LIMIT = 1.0
+    WARNING_LIMIT = 10.0
+
+    # Within OK threshold (diff <= 0.25)
+    if difference <= OK_THRESHOLD:
+        return TaxValidationResult(
+            is_valid=True,
+            action='ok',
+            expected_tax=expected_tax,
+            actual_tax=total_actual_tax,
+            difference=difference,
+            messages=['Tax amount is correct (within OK threshold)']
+        )
+
+    # Within auto-correct limit (0.25 < diff <= 1.0)
+    if difference <= AUTOCORRECT_LIMIT:
         corrections = {}
-        
         if is_inter_state_supply:
             corrections['igst'] = expected_igst
         else:
@@ -881,11 +898,25 @@ def validate_gst_tax(
             corrections=corrections,
             messages=[
                 f'Tax auto-corrected: {total_actual_tax:.2f} -> {expected_tax:.2f}',
-                f'Difference: ₹{difference:.2f} (within ₹{GST_TOLERANCE} tolerance)'
+                f'Difference: ₹{difference:.2f} (within auto-correct limit)'
             ]
         )
-    
-    # STRICT MODE: Any difference > tolerance is an ERROR
+
+    # Within warning limit (1.0 < diff <= 10.0)
+    if difference <= WARNING_LIMIT:
+        return TaxValidationResult(
+            is_valid=True,
+            action='warning',
+            expected_tax=expected_tax,
+            actual_tax=total_actual_tax,
+            difference=difference,
+            messages=[
+                f'Tax mismatch WARNING: expected ₹{expected_tax:.2f}, got ₹{total_actual_tax:.2f}',
+                f'Difference: ₹{difference:.2f} (within warning limit)'
+            ]
+        )
+
+    # Exceeds warning limit (> 10.0)
     return TaxValidationResult(
         is_valid=False,
         action='error',
@@ -894,7 +925,7 @@ def validate_gst_tax(
         difference=difference,
         messages=[
             f'Tax validation FAILED: expected ₹{expected_tax:.2f}, got ₹{total_actual_tax:.2f}',
-            f'Difference: ₹{difference:.2f} (exceeds ₹{GST_TOLERANCE} tolerance)',
+            f'Difference: ₹{difference:.2f} (exceeds warning limit)',
             'Never allow wrong tax to pass silently!'
         ]
     )

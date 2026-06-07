@@ -50,12 +50,31 @@ def _get_alias_value(row: Dict[str, Any], aliases: list, default: Any = 0) -> An
     return default
 
 
-def compute_tax(row: Dict[str, Any]) -> Tuple[float, float, float]:
+def extract_state_code(pos: Any) -> str:
+    """Extract 2-digit state code from Place of Supply / Supplier State."""
+    if not pos:
+        return ""
+    pos_str = str(pos).strip()
+    if len(pos_str) == 2 and pos_str.isdigit():
+        return pos_str
+    if "-" in pos_str:
+        code = pos_str.split("-")[0].strip()
+        if len(code) == 2 and code.isdigit():
+            return code
+    import re
+    match = re.match(r"^(\d{2})", pos_str)
+    if match:
+        return match.group(1)
+    return ""
+
+
+def compute_tax(row: Dict[str, Any], company_gstin: str = "") -> Tuple[float, float, float]:
     """
     Compute tax amounts using Decimal for precision.
     
     Args:
         row: Dictionary with taxable_value, gst_rate, supplier_state_code, place_of_supply
+        company_gstin: Supplier's GSTIN to fallback supplier state
         
     Returns:
         Tuple of (cgst, sgst, igst)
@@ -74,14 +93,20 @@ def compute_tax(row: Dict[str, Any]) -> Tuple[float, float, float]:
         rate = Decimal("0")
     
     supplier_state = str(_get_alias_value(row, ["supplier_state_code", "supplier_state"], ""))
+    if not supplier_state and company_gstin and len(str(company_gstin)) >= 2:
+        supplier_state = str(company_gstin)[:2]
+        
     pos = str(_get_alias_value(row, ["place_of_supply", "pos", "Place Of Supply"], ""))
+    
+    supplier_state_code = extract_state_code(supplier_state)
+    pos_code = extract_state_code(pos)
     
     # Calculate total tax using Decimal
     tax_amount = Decimal(str(taxable_value)) * rate / Decimal("100")
     tax_amount = tax_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     
     # Check states to determine Inter vs Intra 
-    if supplier_state and pos and supplier_state != pos:
+    if supplier_state_code and pos_code and supplier_state_code != pos_code:
         # Inter-state: IGST
         igst = float(tax_amount)
         cgst = 0.00
@@ -148,13 +173,14 @@ def compute_tax_with_breakdown(
     }
 
 
-def apply_tax(df) -> 'pd.DataFrame':
+def apply_tax(df, company_gstin: str = "") -> 'pd.DataFrame':
     """
     Apply tax calculations to a DataFrame while aggressively preserving imported values.
     """
     import pandas as pd
     
-    results = df.apply(lambda row: compute_tax(row), axis=1, result_type="expand")
+    # Compute fallback taxes for all rows
+    results = df.apply(lambda row: compute_tax(row, company_gstin), axis=1, result_type="expand")
     
     # Expanded alias lists for the columns to catch UI states, standard schemas, and Excel mappings
     igst_aliases = ["igst", "igst_amount", "integrated tax", "integrated tax amount", "integrated_tax", "iamt"]
@@ -171,36 +197,70 @@ def apply_tax(df) -> 'pd.DataFrame':
     igst_col = find_col(df, igst_aliases, "igst")
     cgst_col = find_col(df, cgst_aliases, "cgst")
     sgst_col = find_col(df, sgst_aliases, "sgst")
+    cess_col = find_col(df, cess_aliases, "cess")
     
-    for col in [igst_col, cgst_col, sgst_col]:
+    for col in [igst_col, cgst_col, sgst_col, cess_col]:
         if col not in df.columns:
             df[col] = 0.0
 
-    def resolve_tax(existing, computed):
-        """Preserve actual data if supplied, only use fallback compute if missing."""
-        try:
-            # Handle string-formatted numbers securely before float conversion
-            if isinstance(existing, str):
-                existing = existing.replace(',', '').strip()
-            val = float(existing)
-            if not pd.isna(val) and val > 0:
-                return val
-        except (ValueError, TypeError):
-            pass
-        return float(computed)
+    resolved_cgst = []
+    resolved_sgst = []
+    resolved_igst = []
 
-    # Use original tax if present, otherwise inject computation
-    df[cgst_col] = df.apply(lambda r: resolve_tax(r.get(cgst_col, 0), results[0][r.name]), axis=1)
-    df[sgst_col] = df.apply(lambda r: resolve_tax(r.get(sgst_col, 0), results[1][r.name]), axis=1)
-    df[igst_col] = df.apply(lambda r: resolve_tax(r.get(igst_col, 0), results[2][r.name]), axis=1)
+    for idx, row in df.iterrows():
+        def get_existing_val(col_name):
+            val = row.get(col_name, 0)
+            if pd.isna(val) or val is None:
+                return 0.0
+            try:
+                if isinstance(val, str):
+                    val = val.replace(',', '').strip()
+                return float(val)
+            except (ValueError, TypeError):
+                return 0.0
+
+        exist_igst = get_existing_val(igst_col)
+        exist_cgst = get_existing_val(cgst_col)
+        exist_sgst = get_existing_val(sgst_col)
+
+        has_exist_igst = abs(exist_igst) > 0.005
+        has_exist_cgst = abs(exist_cgst) > 0.005
+        has_exist_sgst = abs(exist_sgst) > 0.005
+
+        comp_cgst = float(results[0][idx])
+        comp_sgst = float(results[1][idx])
+        comp_igst = float(results[2][idx])
+
+        # Adjust computed sign if taxable_value is negative
+        tax_aliases = ["taxable_value", "Taxable_Value", "Taxable Value", "txval"]
+        taxable_val = money(_get_alias_value(row, tax_aliases, 0))
+        if taxable_val < 0:
+            comp_igst = -abs(comp_igst)
+            comp_cgst = -abs(comp_cgst)
+            comp_sgst = -abs(comp_sgst)
+
+        if has_exist_igst:
+            resolved_igst.append(exist_igst)
+            resolved_cgst.append(0.0)
+            resolved_sgst.append(0.0)
+        elif has_exist_cgst or has_exist_sgst:
+            resolved_igst.append(0.0)
+            resolved_cgst.append(exist_cgst)
+            resolved_sgst.append(exist_sgst)
+        else:
+            resolved_igst.append(comp_igst)
+            resolved_cgst.append(comp_cgst)
+            resolved_sgst.append(comp_sgst)
+
+    # Assign resolved values back
+    df[cgst_col] = resolved_cgst
+    df[sgst_col] = resolved_sgst
+    df[igst_col] = resolved_igst
     
     # Reinforce variables for downstream GSTR-1 aggregation
     if igst_col != "igst": df["igst"] = df[igst_col]
     if cgst_col != "cgst": df["cgst"] = df[cgst_col]
     if sgst_col != "sgst": df["sgst"] = df[sgst_col]
-    
-    cess_col = find_col(df, cess_aliases, "cess")
-    tax_aliases = ["taxable_value", "Taxable_Value", "Taxable Value", "txval"]
     
     # Calculate invoice_value safely 
     df["invoice_value"] = df.apply(

@@ -142,11 +142,11 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
     const gstr1Data = data.data;
 
     // Calculate totals from all sections
-    const b2bCount = gstr1Data.b2b?.length || 0;
+    const b2bCount = gstr1Data.b2b?.reduce((acc: number, val: any) => acc + (val.invoices?.length || 0), 0) || 0;
     const b2clCount = gstr1Data.b2cl?.length || 0;
     const b2csCount = gstr1Data.b2cs?.length || 0;
     const expCount = gstr1Data.exp?.length || 0;
-    const cdnrCount = gstr1Data.cdnr?.length || 0;
+    const cdnrCount = gstr1Data.cdnr?.reduce((acc: number, val: any) => acc + (val.notes?.length || 0), 0) || 0;
 
     // Calculate totals
     const normalize = (val: any): number => {
@@ -168,39 +168,63 @@ export default function GSTR1PreparePage({ gstin, returnPeriod }: GSTR1PreparePa
       return 0;
     };
 
-    const calculateTotal = (arr: any[]) => {
-      return arr.reduce((acc, item) => {
-        const items = item.items || item.invoices || item.notes || [item];
-        return acc + items.reduce((sum: number, i: any) => {
-          return sum + getVal(i, ['taxable_value', 'txval', 'taxable_amount', 'taxableValue', 'taxableAmount']);
-        }, 0);
+    // Helper: extract a numeric value from an itm/invoice object using field aliases
+    const extractFieldVal = (obj: any, aliases: string[]): number => {
+      for (const k of aliases) {
+        if (obj[k] !== undefined && obj[k] !== null && obj[k] !== '') {
+          return normalize(obj[k]);
+        }
+      }
+      return 0;
+    };
+
+    // Recurse through B2B/CDNR nested structure: ctin → invoices[] → itms[]
+    // Also handles flat structures like B2CS, B2CL, EXP
+    const sumFromStructure = (arr: any[], aliases: string[]): number => {
+      return arr.reduce((acc: number, item: any) => {
+        // B2B: {ctin, invoices: [{inum, itms: [{txval, iamt, camt, samt}]}]}
+        if (Array.isArray(item.invoices)) {
+          return acc + item.invoices.reduce((s: number, inv: any) => {
+            if (Array.isArray(inv.itms)) {
+              return s + inv.itms.reduce((t: number, itm: any) => t + extractFieldVal(itm, aliases), 0);
+            }
+            return s + extractFieldVal(inv, aliases);
+          }, 0);
+        }
+        // CDNR: {ctin, notes: [{nt_num, itms: [{txval, iamt, camt, samt}]}]}
+        if (Array.isArray(item.notes)) {
+          return acc + item.notes.reduce((s: number, note: any) => {
+            if (Array.isArray(note.itms)) {
+              return s + note.itms.reduce((t: number, itm: any) => t + extractFieldVal(itm, aliases), 0);
+            }
+            return s + extractFieldVal(note, aliases);
+          }, 0);
+        }
+        // Flat objects with itms (some formats)
+        if (Array.isArray(item.itms)) {
+          return acc + item.itms.reduce((s: number, itm: any) => s + extractFieldVal(itm, aliases), 0);
+        }
+        // Flat objects: B2CS, B2CL, EXP
+        return acc + extractFieldVal(item, aliases);
       }, 0);
     };
 
+    const calculateTotal = (arr: any[]) => {
+      return sumFromStructure(arr, ['txval', 'taxable_value', 'taxableValue', 'taxable_amount', 'taxableAmount']);
+    };
+
     const calculateInvoiceValue = (arr: any[]) => {
-      return arr.reduce((acc, item) => {
-        const items = item.items || item.invoices || item.notes || [item];
-        return acc + items.reduce((sum: number, i: any) => {
-          return sum + getVal(i, ['total_amount', 'invoice_value', 'val', 'total_value', 'invoiceValue', 'totalAmount']);
-        }, 0);
-      }, 0);
+      return sumFromStructure(arr, ['val', 'invoice_value', 'invoiceValue', 'total_amount', 'total_value', 'totalAmount']);
     };
 
     const calculateTax = (arr: any[], taxField: 'igst' | 'cgst' | 'sgst' | 'cess') => {
       const fieldMap: Record<string, string[]> = {
-        'igst': ['igst_amount', 'iamt', 'igst', 'integrated_tax'],
-        'cgst': ['cgst_amount', 'camt', 'cgst', 'central_tax'],
-        'sgst': ['sgst_amount', 'samt', 'sgst', 'state_tax'],
-        'cess': ['cess_amount', 'csamt', 'cess']
+        'igst': ['iamt', 'igst', 'igst_amount', 'integrated_tax'],
+        'cgst': ['camt', 'cgst', 'cgst_amount', 'central_tax'],
+        'sgst': ['samt', 'sgst', 'sgst_amount', 'state_tax'],
+        'cess': ['csamt', 'cess', 'cess_amount'],
       };
-      const aliases = fieldMap[taxField];
-
-      return arr.reduce((acc, item) => {
-        const items = item.items || item.invoices || item.notes || [item];
-        return acc + items.reduce((sum: number, i: any) => {
-          return sum + getVal(i, aliases);
-        }, 0);
-      }, 0);
+      return sumFromStructure(arr, fieldMap[taxField]);
     };
 
     const b2bData = gstr1Data.b2b || [];

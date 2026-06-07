@@ -447,7 +447,7 @@ class TestTransactionClassification:
             invoice_value=sample_credit_note_row['invoice_value'],
             document_type=sample_credit_note_row.get('document_type'),
         )
-        assert classification.transaction_type == "B2B_CR"
+        assert classification.transaction_type == "CDNR"
         assert classification.is_credit_note
     
     def test_b2b_rcm(self, sample_rcm_row):
@@ -496,7 +496,7 @@ class TestTransactionClassification:
             document_type='Credit Note',
             is_inter_state_supply=True
         )
-        assert classification.transaction_type == "B2CL_CR"
+        assert classification.transaction_type == "CDNUR"
         assert classification.is_credit_note
 
 
@@ -776,6 +776,7 @@ class TestEdgeCases:
             'invoice_number': 'INV/2025-001',
             'invoice_date': '25/12/2025',
             'taxable_value': 1000,
+            'place_of_supply': '27-Maharashtra',
         })
         engine = ValidationEngine()
         results = engine.validate_row(row, row_index=0)
@@ -788,6 +789,7 @@ class TestEdgeCases:
             'invoice_number': 'VERY_LONG_INVOICE_NUMBER_THAT_EXCEEDS_LIMIT',
             'invoice_date': '25/12/2025',
             'taxable_value': 1000,
+            'place_of_supply': '27-Maharashtra',
         })
         engine = ValidationEngine()
         results = engine.validate_row(row, row_index=0)

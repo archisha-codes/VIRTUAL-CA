@@ -27,7 +27,7 @@ class GSTR1Engine:
         input_validation_report = validate_rows(rows)
 
         # 3️⃣ Compute tax
-        rows = apply_tax(rows)
+        rows = apply_tax(rows, self.company_gstin)
 
         # 4️⃣ Classification
         rows = apply_classification(rows)

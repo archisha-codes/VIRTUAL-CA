@@ -34,7 +34,7 @@ class TestValidateGSTIN:
 
     def test_invalid_gstin_format(self):
         """Test GSTIN with invalid format."""
-        gstin = "07AAAA1234A1ZA"  # Missing one character in PAN
+        gstin = "07AAAAA1234A1Z!"  # Invalid character at end, 15 chars
         error = validate_gstin(gstin, "gstin")
         assert error is not None
         assert "does not match expected pattern" in error.error

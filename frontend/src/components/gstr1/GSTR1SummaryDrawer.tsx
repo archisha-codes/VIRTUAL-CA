@@ -865,6 +865,10 @@ export default function GSTR1SummaryDrawer({
         return calculateInvoiceSectionData(items.flatMap((item) => asItems(item.notes)));
       }
 
+      if (items.some((item) => Array.isArray(item?.itms) || Array.isArray(item?.items) || Array.isArray(item?.line_items) || Array.isArray(item?.invoice_items))) {
+        return calculateInvoiceSectionData(items);
+      }
+
       // Sum from items - support multiple field name formats
       // Calculate docCount: sum up docCount if available, otherwise use items.length
       const totalDocs = items.reduce((sum, item) => {
